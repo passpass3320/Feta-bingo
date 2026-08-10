@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="am">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>ቢንጎ - Bingo</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script src="/socket.io/socket.io.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #1e1e1e; color: #e0e0e0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      padding: 10px; max-width: 480px; margin: auto;
+    }
+    .card { background: #2a2a2a; border-radius: 12px; padding: 15px; margin: 10px 0; }
+    .balance { font-size: 1.4em; font-weight: bold; }
+    .btn {
+      background: #4CAF50; border: none; color: white; padding: 12px 24px;
+      border-radius: 8px; font-size: 1em; cursor: pointer; margin: 5px 0; width: 100%;
+    }
+    .btn:disabled { background: #555; }
+    .bingo-grid {
+      display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px;
+      text-align: center; margin-top: 10px;
+    }
+    .bingo-cell {
+      background: #333; padding: 8px 0; border-radius: 6px;
+      font-size: 0.9em; font-weight: bold;
+    }
+    .bingo-cell.marked { background: #4CAF50; color: white; }
+    .bingo-cell.free { background: #ffc107; color: black; }
+    .number-history { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 10px; }
+    .number-ball {
+      background: #555; width: 36px; height: 36px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center; font-weight: bold;
+    }
+    .tab-bar { display: flex; gap: 10px; margin-bottom: 15px; }
+    .tab { flex: 1; text-align: center; padding: 10px; background: #333; border-radius: 8px; cursor: pointer; }
+    .tab.active { background: #4CAF50; }
+    input, select, textarea {
+      width: 100%; padding: 12px; margin: 5px 0 10px; border-radius: 8px;
+      border: none; background: #333; color: white; font-size: 1em;
+    }
+    .winner-banner {
+      background: gold; color: black; padding: 12px; border-radius: 10px; text-align: center; font-size: 1.3em; margin: 10px 0;
+    }
+  </style>
+</head>
+<body>
+  <div id="login-screen">
+    <h2>ቢንጎ</h2>
+    <p>Please open this app inside Telegram</p>
+    <button class="btn" onclick="initTelegram()">Connect Telegram</button>
+  </div>
+
+  <div id="main-app" style="display:none;">
+    <div class="card" id="balance-card">
+      <span>💰 Balance: <span class="balance" id="balance">0</span> Birr</span>
+    </div>
+
+    <div class="tab-bar">
+      <div class="tab active" onclick="switchTab('game')">Bingo</div>
+      <div class="tab" onclick="switchTab('wallet')">Wallet</div>
+      <div class="tab" id="admin-tab" style="display:none;" onclick="switchTab('admin')">Admin</div>
+    </div>
+
+    <!-- GAME TAB -->
+    <div id="tab-game">
+      <div class="card">
+        <h3>Game <span id="round-number"></span></h3>
+        <p>Status: <strong id="game-status">Loading...</strong></p>
+        <p>Pot: <span id="pot">0</span> Birr</p>
+        <p>Cards sold: <span id="sold">0</span> / <span id="total">200</span></p>
+        <button class="btn" id="buy-card-btn" onclick="buyCard()">Buy Card (10 Birr)</button>
+      </div>
+      <div class="card" id="drawn-history-card">
+        <h4>Drawn Numbers</h4>
+        <div class="number-history" id="drawn-numbers"></div>
+      </div>
+      <div id="my-cards"></div>
+      <div id="winner-announcement"></div>
+    </div>
+
+    <!-- WALLET TAB -->
+    <div id="tab-wallet" style="display:none;">
+      <div class="card">
+        <h3>Deposit</h3>
+        <p>Upload Telebirr/CBE screenshot</p>
+        <input type="number" id="deposit-amount" placeholder="Amount (Birr)">
+        <input type="file" id="deposit-screenshot" accept="image/*">
+        <button class="btn" onclick="submitDeposit()">Submit Deposit Request</button>
+      </div>
+      <div class="card">
+        <h3>Withdraw</h3>
+        <input type="number" id="withdraw-amount" placeholder="Amount (Birr)">
+        <textarea id="withdraw-details" placeholder="Account name/number"></textarea>
+        <button class="btn" onclick="submitWithdrawal()">Request Withdrawal</button>
+      </div>
+    </div>
+
+    <!-- ADMIN TAB -->
+    <div id="tab-admin" style="display:none;">
+      <div class="card">
+        <h3>Admin Panel</h3>
+        <input type="password" id="admin-key" placeholder="Admin Key" value="super-secret-admin-key">
+        <button class="btn" onclick="startNewRound()">Start New Round</button>
+        <button class="btn" onclick="startDraw()">Start Drawing</button>
+        <hr>
+        <h4>Deposit Requests</h4>
+        <button class="btn" onclick="loadDeposits()">Refresh</button>
+        <div id="admin-deposits"></div>
+        <h4>Withdrawal Requests</h4>
+        <button class="btn" onclick="loadWithdrawals()">Refresh</button>
+        <div id="admin-withdrawals"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const API = ''; // same origin
+    let socket;
+    let currentUser = null;
+    let adminMode = false;
+
+    // ---------- Telegram Init ----------
+    window.Telegram.WebApp.ready();
+    const tg = window.Telegram.WebApp;
+
+    function initTelegram() {
+      if (!tg.initData || !tg.initData.length) {
+        alert('Please open this mini app from Telegram!');
+        return;
+      }
+      fetch('/auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ initData: tg.initData })
+      })
+      .then(r => r.json())
+      .then(data => {
+        if (data.error) { alert(data.error); return; }
+        currentUser = data;
+        document.getElementById('login-screen').style.display = 'none';
+        document.getElementById('main-app').style.display = 'block';
+        document.getElementById('balance').innerText = data.balance;
+        connectSocket();
+        loadGameState();
+        // Admin check – very basic: if telegramId is admin's (change in production)
+        if (data.telegramId === 'YOUR_ADMIN_TELEGRAM_ID') {
+          document.getElementById('admin-tab').style.display = 'block';
+          adminMode = true;
+        }
+      });
+    }
+
+    // ---------- Socket.io ----------
+    function connectSocket() {
+      socket = io();
+      socket.emit('join', currentUser.userId);
+      socket.on('game_update', (data) => {
+        updateGameUI(data);
+      });
+      socket.on('new_number', (data) => {
+        addDrawnNumber(data.number);
+        playAmharicCall(data.audioUrl);
+      });
+      socket.on('game_winner', (data) => {
+        document.getElementById('winner-announcement').innerHTML =
+          `<div class="winner-banner">${data.message}</div>`;
+        loadGameState();
+      });
+      socket.on('game_over', (data) => {
+        document.getElementById('winner-announcement').innerHTML =
+          `<div class="winner-banner">${data.message}</div>`;
+      });
+    }
+
+    function playAmharicCall(url) {
+      if (!url) return;
+      const audio = new Audio(url);
+      audio.play().catch(e => console.log('Audio play failed:', e));
+    }
+
+    // ---------- UI Updates ----------
+    function updateGameUI(data) {
+      document.getElementById('round-number').innerText = data.round || '';
+      document.getElementById('game-status').innerText = data.status;
+      document.getElementById('pot').innerText = data.pot || 0;
+      document.getElementById('sold').innerText = data.soldCards || 0;
+      document.getElementById('total').innerText = data.totalCards || 200;
+      document.getElementById('buy-card-btn').disabled = (data.status !== 'idle');
+      if (data.drawnNumbers) {
+        data.drawnNumbers.forEach(n => addDrawnNumber(n));
+      }
+    }
+
+    function addDrawnNumber(num) {
+      const container = document.getElementById('drawn-numbers');
+      if (!container.querySelector(`.number-ball[data-num="${num}"]`)) {
+        const ball = document.createElement('div');
+        ball.className = 'number-ball';
+        ball.dataset.num = num;
+        ball.innerText = num;
+        container.prepend(ball);
+      }
+    }
+
+    async function loadGameState() {
+      const res = await fetch(`/game-state?userId=${currentUser.userId}`);
+      const state = await res.json();
+      updateGameUI(state);
+      document.getElementById('balance').innerText = state.balance || 0;
+      renderMyCards(state.userCards, state.drawnNumbers);
+    }
+
+    function renderMyCards(cards, drawnNumbers) {
+      const container = document.getElementById('my-cards');
+      if (!cards || cards.length === 0) {
+        container.innerHTML = '<p>You have no cards yet.</p>';
+        return;
+      }
+      container.innerHTML = cards.map(card => {
+        const numbers = JSON.parse(card.numbers);
+        const marked = new Set(JSON.parse(card.marked).map(Number));
+        const drawnSet = new Set(drawnNumbers);
+        // Auto-mark for display
+        numbers.forEach((n, i) => {
+          if (n !== 0 && drawnSet.has(n)) marked.add(i);
+        });
+        const cells = numbers.map((n, i) => {
+          let cls = 'bingo-cell';
+          if (n === 0) cls += ' free';
+          else if (marked.has(i)) cls += ' marked';
+          return `<div class="${cls}">${n === 0 ? 'FREE' : n}</div>`;
+        }).join('');
+        return `<div class="card"><h4>Your Card #${card.id}</h4><div class="bingo-grid">${cells}</div></div>`;
+      }).join('');
+    }
+
+    // ---------- Tab switching ----------
+    function switchTab(tab) {
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('[id^="tab-"]').forEach(d => d.style.display = 'none');
+      document.getElementById('tab-' + tab).style.display = 'block';
+      document.querySelector(`.tab:contains('${tab==='game'?'Bingo':tab==='wallet'?'Wallet':'Admin'}')`).classList.add('active');
+    }
+
+    // ---------- Buy Card ----------
+    async function buyCard() {
+      if (!currentUser) return;
+      const res = await fetch('/buy-card', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: currentUser.userId })
+      });
+      const data = await res.json();
+      if (data.error) alert(data.error);
+      else {
+        document.getElementById('balance').innerText = data.balance;
+        loadGameState();
+      }
+    }
+
+    // ---------- Wallet actions ----------
+    async function submitDeposit() {
+      const amount = document.getElementById('deposit-amount').value;
+      const file = document.getElementById('deposit-screenshot').files[0];
+      if (!amount || !file) return alert('Fill all fields');
+      const formData = new FormData();
+      formData.append('userId', currentUser.userId);
+      formData.append('amount', amount);
+      formData.append('screenshot', file);
+      const res = await fetch('/deposit', { method: 'POST', body: formData });
+      const data = await res.json();
+      if (data.success) alert('Deposit request submitted. Wait for admin approval.');
+      else alert(data.error);
+    }
+
+    async function submitWithdrawal() {
+      const amount = document.getElementById('withdraw-amount').value;
+      const details = document.getElementById('withdraw-details').value;
+      if (!amount || !details) return alert('Fill all fields');
+      const res = await fetch('/withdraw', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: currentUser.userId, amount, accountDetails: details })
+      });
+      const data = await res.json();
+      if (data.success) alert('Withdrawal request submitted. Wait for admin approval.');
+      else alert(data.error);
+    }
+
+    // ---------- Admin functions ----------
+    async function startNewRound() {
+      const key = document.getElementById('admin-key').value;
+      const res = await fetch('/admin/start-round', {
+        method: 'POST',
+        headers: { 'X-Admin-Key': key }
+      });
+      const data = await res.json();
+      if (data.error) alert(data.error);
+      else alert('New round started!');
+    }
+
+    async function startDraw() {
+      const key = document.getElementById('admin-key').value;
+      const res = await fetch('/admin/start-draw', {
+        method: 'POST',
+        headers: { 'X-Admin-Key': key }
+      });
+      const data = await res.json();
+      if (data.error) alert(data.error);
+      else alert('Draw started!');
+    }
+
+    async function loadDeposits() {
+      const key = document.getElementById('admin-key').value;
+      const res = await fetch('/admin/deposits', { headers: { 'X-Admin-Key': key } });
+      const deposits = await res.json();
+      const html = deposits.map(d => `
+        <div class="card">
+          <p><b>${d.username}</b> (${d.telegram_id}) – ${d.amount} Birr</p>
+          <img src="/${d.screenshot_path}" style="width:100%; border-radius:8px;"><br>
+          <button onclick="approveDeposit(${d.id})">Approve</button>
+          <button onclick="rejectDeposit(${d.id})">Reject</button>
+          <span>Status: ${d.status}</span>
+        </div>
+      `).join('');
+      document.getElementById('admin-deposits').innerHTML = html;
+    }
+
+    async function approveDeposit(id) {
+      const key = document.getElementById('admin-key').value;
+      await fetch(`/admin/deposits/${id}/approve`, { method: 'POST', headers: { 'X-Admin-Key': key } });
+      loadDeposits();
+    }
+    async function rejectDeposit(id) {
+      const key = document.getElementById('admin-key').value;
+      await fetch(`/admin/deposits/${id}/reject`, { method: 'POST', headers: { 'X-Admin-Key': key } });
+      loadDeposits();
+    }
+
+    async function loadWithdrawals() {
+      const key = document.getElementById('admin-key').value;
+      const res = await fetch('/admin/withdrawals', { headers: { 'X-Admin-Key': key } });
+      const withdrawals = await res.json();
+      const html = withdrawals.map(w => `
+        <div class="card">
+          <p><b>${w.username}</b> – ${w.amount} Birr<br>Account: ${w.account_details}</p>
+          <button onclick="approveWithdrawal(${w.id})">Approve</button>
+          <button onclick="rejectWithdrawal(${w.id})">Reject</button>
+          <span>Status: ${w.status}</span>
+        </div>
+      `).join('');
+      document.getElementById('admin-withdrawals').innerHTML = html;
+    }
+
+    async function approveWithdrawal(id) {
+      const key = document.getElementById('admin-key').value;
+      await fetch(`/admin/withdrawals/${id}/approve`, { method: 'POST', headers: { 'X-Admin-Key': key } });
+      loadWithdrawals();
+    }
+    async function rejectWithdrawal(id) {
+      const key = document.getElementById('admin-key').value;
+      await fetch(`/admin/withdrawals/${id}/reject`, { method: 'POST', headers: { 'X-Admin-Key': key } });
+      loadWithdrawals();
+    }
+
+    // Auto-load game when socket connects
+    window.addEventListener('load', () => {
+      if (tg.initData.length) initTelegram();
+      else document.getElementById('login-screen').style.display = 'block';
+    });
+  </script>
+</body>
+</html>
