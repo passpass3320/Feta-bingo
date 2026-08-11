@@ -475,11 +475,12 @@ function createRoom(roomId) {
     calledNumbers: [],
     remaining: Array.from({ length: 75 }, (_, i) => i + 1),
     intervalId: null,
-    takenCartellas: {},   // cartellaId -> telegram_id (or 'bot_<id>' for filler bots)
-    bots: [],              // [{ cartellaId, name }]
-    playerStakes: {},      // telegram_id -> amount staked this round (real players only)
+    takenCartellas: {},    // cartellaId -> telegram_id (or 'bot_<id>' for filler bots)
+    playerCartellas: {},   // telegram_id -> [cartellaId, ...] - a player may hold several cards
+    bots: [],               // [{ cartellaId, name }]
+    playerStakes: {},      // telegram_id -> total amount staked this round (real players only)
     pot: 0,
-    pendingWinners: [],    // telegram_ids who validly claimed Bingo this round
+    pendingWinners: [],    // [{ telegram_id, cartellaId }] who validly claimed Bingo this round
     winnerWindowTimer: null
   };
   return gameRooms[roomId];
@@ -553,26 +554,20 @@ function finalizeRound(roomId) {
   if (room.intervalId) { clearInterval(room.intervalId); room.intervalId = null; }
   room.winnerWindowTimer = null;
 
-  const winners = room.pendingWinners.slice();
+  const winners = room.pendingWinners.slice(); // [{ telegram_id, cartellaId }]
   const pot = room.pot;
   const commission = Math.round(pot * COMMISSION_RATE * 100) / 100;
   const payout = Math.round((pot - commission) * 100) / 100;
   const share = winners.length > 0 ? Math.round((payout / winners.length) * 100) / 100 : 0;
 
-  winners.forEach((tid) => creditWinnings(tid, share));
+  winners.forEach((w) => creditWinnings(w.telegram_id, share));
 
   db.prepare('INSERT INTO commission_log (room_id, pot, commission, payout, winners_count) VALUES (?, ?, ?, ?, ?)')
     .run(roomId, pot, commission, payout, winners.length);
 
   io.to(roomId).emit('callingState', { active: false });
-  io.to(roomId).emit('roundResult', {
-    winners: winners.map((tid) => ({
-      telegram_id: tid,
-      cartellaId: Object.keys(room.takenCartellas).find((c) => room.takenCartellas[c] === tid)
-    })),
-    pot, commission, payout, share
-  });
-  notifyAdminRound(roomId, pot, commission, winners, share);
+  io.to(roomId).emit('roundResult', { winners, pot, commission, payout, share });
+  notifyAdminRound(roomId, pot, commission, winners.map((w) => w.telegram_id), share);
   scheduleNextRound(roomId);
 }
 
@@ -583,10 +578,9 @@ function scheduleNextRound(roomId) {
     io.to(roomId).emit('cartellaState', { taken: {}, bots: [] });
     io.to(roomId).emit('callingState', { active: false });
     io.to(roomId).emit('potUpdate', { pot: 0, players: 0 });
-    if (getPlayerCount(roomId) > 0) {
-      ensureBots(roomId);
-      startCallingLoop(roomId);
-    }
+    // Refresh bot fillers for atmosphere only - calling still waits for a real
+    // player to pick a cartella via selectCartella, same rule as the first round.
+    if (getPlayerCount(roomId) > 0) ensureBots(roomId);
   }, NEXT_ROUND_DELAY_MS);
 }
 
@@ -599,8 +593,9 @@ io.on('connection', (socket) => {
     socket.emit('potUpdate', { pot: room.pot, players: Object.keys(room.playerStakes).length });
     socket.emit('callingState', { active: !!room.intervalId });
 
+    // NOTE: bots are still refreshed here for atmosphere (so the lobby looks populated),
+    // but calling numbers does NOT start here anymore - see selectCartella below.
     ensureBots(roomId);
-    if (!room.intervalId && room.remaining.length > 0) startCallingLoop(roomId);
   });
 
   socket.on('disconnecting', () => {
@@ -617,47 +612,66 @@ io.on('connection', (socket) => {
     if (!Number.isInteger(id) || id < 1 || id > CARTELLA_COUNT) {
       return socket.emit('cartellaError', { code: 'INVALID', message: 'Invalid cartella number.' });
     }
-    if (room.takenCartellas[id] && room.takenCartellas[id] !== telegram_id) {
+    if (room.takenCartellas[id]) {
       return socket.emit('cartellaError', { code: 'TAKEN', message: 'This cartella is already taken. Pick another.' });
     }
 
-    // Charge the stake once per player per round; switching cartella afterwards is free.
-    if (!room.playerStakes[telegram_id]) {
-      if (getWalletTotal(telegram_id) < STAKE) {
-        return socket.emit('cartellaError', {
-          code: 'INSUFFICIENT_BALANCE',
-          message: `በቂ ሂሳብ የለዎትም። ለመጫወት ${STAKE} ብር ወይም ከዚያ በላይ ያስፈልጋል። እባክዎ ገንዘብ ያስገቡ። (Insufficient balance - deposit at least ${STAKE} Birr to play.)`
-        });
-      }
-      deductStake(telegram_id, STAKE);
-      room.playerStakes[telegram_id] = STAKE;
-      room.pot += STAKE;
-      io.to(roomId).emit('potUpdate', { pot: room.pot, players: Object.keys(room.playerStakes).length });
+    // Each additional card costs another stake (multiple cards = better odds, same as
+    // real bingo halls selling several tickets to one player).
+    if (getWalletTotal(telegram_id) < STAKE) {
+      return socket.emit('cartellaError', {
+        code: 'INSUFFICIENT_BALANCE',
+        message: `በቂ ሂሳብ የለዎትም። ለመጫወት ${STAKE} ብር ወይም ከዚያ በላይ ያስፈልጋል። እባክዎ ገንዘብ ያስገቡ። (Insufficient balance - deposit at least ${STAKE} Birr to play.)`
+      });
     }
+    deductStake(telegram_id, STAKE);
+    room.playerStakes[telegram_id] = (room.playerStakes[telegram_id] || 0) + STAKE;
+    room.pot += STAKE;
+    io.to(roomId).emit('potUpdate', { pot: room.pot, players: Object.keys(room.playerStakes).length });
 
-    Object.keys(room.takenCartellas).forEach((cid) => {
-      if (room.takenCartellas[cid] === telegram_id) delete room.takenCartellas[cid];
-    });
     room.takenCartellas[id] = telegram_id;
-    socket.emit('cartellaAssigned', { cartellaId: id, card: generateCartella(id) });
+    if (!room.playerCartellas[telegram_id]) room.playerCartellas[telegram_id] = [];
+    room.playerCartellas[telegram_id].push(id);
+
+    socket.emit('cartellaAssigned', { cartellaId: id, card: generateCartella(id), myCartellas: room.playerCartellas[telegram_id] });
     io.to(roomId).emit('cartellaState', { taken: room.takenCartellas, bots: room.bots });
+
+    // Number drawing only begins once a real player has actually picked a cartella -
+    // never just from opening the app / joining the room.
+    if (!room.intervalId && room.remaining.length > 0) startCallingLoop(roomId);
+  });
+
+  socket.on('deselectCartella', ({ roomId, cartellaId, telegram_id }) => {
+    const room = gameRooms[roomId];
+    if (!room || room.intervalId) return; // no refunds/changes once calling has started
+    const id = Number(cartellaId);
+    if (room.takenCartellas[id] !== telegram_id) return;
+    delete room.takenCartellas[id];
+    room.playerCartellas[telegram_id] = (room.playerCartellas[telegram_id] || []).filter((c) => c !== id);
+    room.playerStakes[telegram_id] = Math.max(0, (room.playerStakes[telegram_id] || 0) - STAKE);
+    room.pot = Math.max(0, room.pot - STAKE);
+    refundStake(telegram_id, STAKE);
+    io.to(roomId).emit('potUpdate', { pot: room.pot, players: Object.keys(room.playerStakes).length });
+    io.to(roomId).emit('cartellaState', { taken: room.takenCartellas, bots: room.bots });
+    socket.emit('cartellaReleased', { cartellaId: id, myCartellas: room.playerCartellas[telegram_id] });
   });
 
   socket.on('claimBingo', ({ roomId, telegram_id }) => {
     const room = gameRooms[roomId];
     if (!room) return;
-    const myCartellaId = Object.keys(room.takenCartellas).find((cid) => room.takenCartellas[cid] === telegram_id);
-    if (!myCartellaId) {
+    const myCartellas = room.playerCartellas[telegram_id] || [];
+    if (myCartellas.length === 0) {
       return socket.emit('bingoError', { message: 'እባክዎ መጀመሪያ ካርቴላ ይምረጡ (Pick a cartella first).' });
     }
-    const card = generateCartella(Number(myCartellaId));
     const calledSet = new Set(room.calledNumbers);
-    if (!isCardWinning(card, calledSet)) {
+    // A player with several cards wins if ANY one of them is complete.
+    const winningCartellaId = myCartellas.find((cid) => isCardWinning(generateCartella(cid), calledSet));
+    if (winningCartellaId === undefined) {
       return socket.emit('bingoError', { message: 'ገና ትክክለኛ ቢንጎ የለዎትም (Not a valid Bingo yet).' });
     }
-    if (!room.pendingWinners.includes(telegram_id)) {
-      room.pendingWinners.push(telegram_id);
-      io.to(roomId).emit('winnerClaimed', { telegram_id, cartellaId: myCartellaId, pendingCount: room.pendingWinners.length });
+    if (!room.pendingWinners.some((w) => w.telegram_id === telegram_id)) {
+      room.pendingWinners.push({ telegram_id, cartellaId: winningCartellaId });
+      io.to(roomId).emit('winnerClaimed', { telegram_id, cartellaId: winningCartellaId, pendingCount: room.pendingWinners.length });
     }
     if (!room.winnerWindowTimer) {
       if (room.intervalId) { clearInterval(room.intervalId); room.intervalId = null; } // freeze calling once a winner appears
