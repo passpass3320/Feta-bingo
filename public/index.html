@@ -8,19 +8,21 @@
 <script src="/socket.io/socket.io.js"></script>
 <style>
   :root {
-    --bg: #0f1220;
-    --card: #1b1f34;
-    --accent: #ffb020;
-    --accent2: #22c55e;
-    --danger: #ef4444;
-    --text: #f1f1f6;
-    --muted: #9aa0b4;
+    --bg: #0d1021;
+    --bg2: #161a35;
+    --card: #1b1f3d;
+    --accent: #ffc94d;
+    --accent-deep: #f0a500;
+    --accent2: #2ecc71;
+    --danger: #ff5d5d;
+    --text: #f4f5fb;
+    --muted: #9aa0c3;
   }
   * { box-sizing: border-box; }
   body {
     margin: 0;
     font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
-    background: var(--bg);
+    background: radial-gradient(circle at 20% 0%, #221c46 0%, var(--bg) 55%);
     color: var(--text);
     padding-bottom: 90px;
   }
@@ -29,26 +31,58 @@
     justify-content: space-between;
     align-items: center;
     padding: 14px 16px;
-    background: var(--card);
+    background: linear-gradient(180deg, var(--bg2), var(--card));
     position: sticky;
     top: 0;
     z-index: 5;
+    border-bottom: 1px solid #2c2f57;
   }
-  header h1 { font-size: 18px; margin: 0; }
+  header h1 {
+    font-size: 19px;
+    margin: 0;
+    background: linear-gradient(90deg, var(--accent), #ffe9b0);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    font-weight: 800;
+  }
   .wallet-pill {
-    background: #262b45;
+    background: #262b52;
     border-radius: 20px;
     padding: 8px 14px;
     font-size: 13px;
     text-align: right;
     line-height: 1.3;
+    border: 1px solid #363a6a;
   }
   .wallet-pill b { color: var(--accent); font-size: 15px; }
   .wallet-pill small { color: var(--muted); display: block; }
 
   main { padding: 16px; }
 
-  /* Stats bar (Players / Prize / Stake / Calls) */
+  .spectator-banner {
+    display: none;
+    background: linear-gradient(90deg,#4a2e00,#6b4400);
+    border: 1px solid var(--accent-deep);
+    border-radius: 12px;
+    padding: 10px 14px;
+    font-size: 13px;
+    margin-bottom: 14px;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .spectator-banner.visible { display: flex; }
+  .spectator-banner button {
+    background: var(--accent);
+    color: #241900;
+    border: none;
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-weight: 700;
+    font-size: 12px;
+  }
+
   .stats-bar {
     display: flex;
     gap: 8px;
@@ -70,267 +104,31 @@
   .stat-stake   { background: linear-gradient(135deg,#f08c00,#d9720a); }
   .stat-calls   { background: linear-gradient(135deg,#e64980,#c2255c); }
 
-  .caller-box {
-    background: linear-gradient(160deg,#3b2f66,#241c40);
-    border-radius: 16px;
-    padding: 18px;
-    text-align: center;
-    margin-bottom: 16px;
-  }
-  .caller-box .current-label { color: var(--muted); font-size: 13px; margin-bottom: 6px; }
-  .caller-number {
-    width: 92px;
-    height: 92px;
-    line-height: 92px;
-    border-radius: 50%;
-    margin: 0 auto;
-    font-size: 34px;
-    font-weight: 800;
-    background: radial-gradient(circle at 35% 30%, #ffd166, var(--accent));
-    color: #241900;
-    border: 4px solid #fff3;
-  }
-  .caller-amharic { font-size: 18px; color: var(--muted); margin-top: 10px; }
-
-  .last-called-row {
-    display: flex;
-    justify-content: center;
-    gap: 10px;
-    margin: 14px 0;
-  }
-  .ball {
-    width: 46px;
-    height: 46px;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-weight: 700;
-    font-size: 14px;
+  .cartella-btn {
+    width: 100%;
+    margin-bottom: 14px;
+    background: linear-gradient(135deg,#f08c00,#d9720a);
     color: #fff;
-  }
-  .ball-B { background: #f03e3e; }
-  .ball-I { background: #f08c00; }
-  .ball-N { background: #f1c40f; color: #241900; }
-  .ball-G { background: #2f9e44; }
-  .ball-O { background: #1c7ed6; }
-
-  .toggle-row {
-    display: flex;
-    justify-content: center;
-    gap: 12px;
-  }
-  .toggle-chip {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    background: #12152a;
-    padding: 8px 14px;
-    border-radius: 20px;
-    font-size: 13px;
-    font-weight: 600;
-    cursor: pointer;
-    user-select: none;
-    border: 1px solid #333856;
-  }
-  .toggle-chip.active { background: #16532a; border-color: #2f9e44; }
-  #autoToggle { cursor: default; }
-  .toggle-chip .dot {
-    width: 10px; height: 10px; border-radius: 50%;
-    background: var(--muted);
-  }
-  .toggle-chip.active .dot { background: var(--accent2); }
-
-  .bingo-board {
-    margin-top: 16px;
-    background: var(--card);
-    border-radius: 16px;
-    padding: 10px;
-  }
-  .bingo-header {
-    display: grid;
-    grid-template-columns: repeat(5, 1fr);
-    gap: 4px;
-    margin-bottom: 4px;
-  }
-  .bingo-header div {
-    text-align: center;
-    font-weight: 800;
-    border-radius: 6px;
-    padding: 6px 0;
-    color: #fff;
-  }
-  .col-B { background: #f03e3e; }
-  .col-I { background: #f08c00; }
-  .col-N { background: #f1c40f; color:#241900 !important; }
-  .col-G { background: #2f9e44; }
-  .col-O { background: #1c7ed6; }
-
-  .board {
-    display: grid;
-    grid-template-columns: repeat(5, 1fr);
-    grid-template-rows: repeat(15, 1fr);
-    grid-auto-flow: column;
-    gap: 4px;
-  }
-  .board div {
-    aspect-ratio: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: #262b45;
-    border-radius: 6px;
-    font-size: 13px;
-    color: var(--muted);
-    font-weight: 600;
-  }
-  .board div.called {
-    background: var(--accent2);
-    color: #06210f;
-  }
-
-  .actions { display: flex; gap: 10px; margin-top: 16px; }
-  button {
     border: none;
     border-radius: 12px;
     padding: 12px 16px;
     font-size: 15px;
-    font-weight: 600;
-    cursor: pointer;
+    font-weight: 700;
   }
-  .btn-primary { background: var(--accent); color: #241900; flex: 1; }
-  .btn-outline { background: transparent; border: 1px solid var(--muted); color: var(--text); flex: 1; }
-  .btn-danger { background: var(--danger); color: #fff; }
+  .cartella-btn:disabled { opacity: 0.5; }
 
-  .bottom-nav {
-    position: fixed;
-    bottom: 0; left: 0; right: 0;
-    display: flex;
-    background: var(--card);
-    padding: 10px 16px;
-    gap: 10px;
-    border-top: 1px solid #2a2f4a;
-  }
-  .bottom-nav button { flex: 1; }
-
-  /* Modal */
-  .modal-overlay {
-    display: none;
-    position: fixed; inset: 0;
-    background: rgba(0,0,0,0.6);
-    z-index: 20;
-    align-items: flex-end;
-    justify-content: center;
-  }
-  .modal-overlay.open { display: flex; }
-  .modal {
-    background: var(--card);
+  .bingo-btn {
     width: 100%;
-    max-width: 480px;
-    border-radius: 20px 20px 0 0;
-    padding: 20px;
-    max-height: 88vh;
-    overflow-y: auto;
-  }
-  .modal h2 { margin-top: 0; }
-  .modal label {
-    display: block;
-    font-size: 13px;
-    color: var(--muted);
-    margin: 12px 0 6px;
-  }
-  .modal input, .modal select {
-    width: 100%;
-    padding: 12px;
-    border-radius: 10px;
-    border: 1px solid #333856;
-    background: #12152a;
-    color: var(--text);
-    font-size: 15px;
-  }
-  .method-card {
-    background: #12152a;
-    border: 1px solid #333856;
+    margin-top: 10px;
+    background: linear-gradient(135deg, var(--accent2), #1c9c4d);
+    color: #06210f;
+    border: none;
     border-radius: 12px;
-    padding: 12px;
-    margin-top: 10px;
-  }
-  .method-card b { color: var(--accent); }
-  .method-card .num {
+    padding: 14px;
     font-size: 17px;
-    letter-spacing: 1px;
-    margin-top: 4px;
+    font-weight: 800;
   }
-  .copy-btn {
-    background: #2a2f4a;
-    color: var(--text);
-    padding: 4px 10px;
-    border-radius: 8px;
-    font-size: 12px;
-    margin-left: 8px;
-  }
-  .hint { font-size: 12px; color: var(--muted); margin-top: 8px; }
-  .balance-split {
-    display: flex;
-    gap: 10px;
-    margin-top: 10px;
-  }
-  .balance-split div {
-    flex: 1;
-    background: #12152a;
-    border-radius: 10px;
-    padding: 10px;
-    text-align: center;
-  }
-  .balance-split b { display: block; font-size: 16px; }
-  .close-x {
-    position: absolute;
-    top: 16px; right: 20px;
-    background: none;
-    color: var(--muted);
-    font-size: 22px;
-    padding: 0;
-  }
-  .modal { position: relative; }
-  .status-msg { margin-top: 10px; font-size: 13px; }
-  .status-ok { color: var(--accent2); }
-  .status-err { color: var(--danger); }
-
-  .history-item {
-    display: flex;
-    justify-content: space-between;
-    padding: 10px 0;
-    border-bottom: 1px solid #2a2f4a;
-    font-size: 13px;
-  }
-  .tag { padding: 2px 8px; border-radius: 8px; font-size: 11px; }
-  .tag-pending { background: #4a3a10; color: #ffb020; }
-  .tag-approved, .tag-paid { background: #103a1c; color: #22c55e; }
-  .tag-rejected { background: #3a1010; color: #ef4444; }
-
-  /* Cartella picker */
-  .cartella-btn {
-    background: linear-gradient(135deg,#f08c00,#d9720a);
-    color: #fff;
-  }
-  .cartella-grid {
-    display: grid;
-    grid-template-columns: repeat(8, 1fr);
-    gap: 6px;
-    margin-top: 12px;
-    max-height: 260px;
-    overflow-y: auto;
-  }
-  .cartella-grid button {
-    padding: 8px 0;
-    font-size: 12px;
-    border-radius: 8px;
-    background: #12152a;
-    color: var(--text);
-    border: 1px solid #333856;
-  }
-  .cartella-grid button.taken { opacity: 0.35; background: #2a2f4a; cursor: not-allowed; }
-  .cartella-grid button.selected { background: var(--accent); color: #241900; font-weight: 800; }
+  .bingo-btn:disabled { opacity: 0.4; }
 
   .my-card-widget {
     background: var(--card);
@@ -376,52 +174,183 @@
   .my-card-grid .cell.free { background: var(--accent); color: #241900; }
   .my-card-grid .cell.daubed { background: var(--accent2); color: #06210f; }
 
-  /* Loading screen */
-  #loadingScreen {
-    position: fixed;
-    inset: 0;
-    z-index: 999;
-    background: linear-gradient(160deg, #b39ddb, #9575cd);
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    transition: opacity 0.4s ease;
+  .caller-box {
+    background: linear-gradient(160deg,#3b2f66,#241c40);
+    border-radius: 16px;
+    padding: 18px;
+    text-align: center;
+    margin-bottom: 16px;
   }
-  #loadingScreen.hidden {
-    opacity: 0;
-    pointer-events: none;
-  }
-  #loadingScreen .logo {
+  .caller-box .current-label { color: var(--muted); font-size: 13px; margin-bottom: 6px; }
+  .caller-number {
+    width: 92px;
+    height: 92px;
+    line-height: 92px;
+    border-radius: 50%;
+    margin: 0 auto;
     font-size: 34px;
     font-weight: 800;
-    color: #fff;
-    margin-bottom: 18px;
-    letter-spacing: 1px;
+    background: radial-gradient(circle at 35% 30%, #ffe08a, var(--accent));
+    color: #241900;
+    border: 4px solid #fff3;
   }
+  .caller-amharic { font-size: 18px; color: var(--muted); margin-top: 10px; }
+
+  .last-called-row { display: flex; justify-content: center; gap: 10px; margin: 14px 0; }
+  .ball {
+    width: 46px; height: 46px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 14px; color: #fff;
+  }
+  .ball-B { background: #f03e3e; }
+  .ball-I { background: #f08c00; }
+  .ball-N { background: #f1c40f; color: #241900; }
+  .ball-G { background: #2f9e44; }
+  .ball-O { background: #1c7ed6; }
+
+  .toggle-row { display: flex; justify-content: center; gap: 12px; }
+  .toggle-chip {
+    display: flex; align-items: center; gap: 8px;
+    background: #12152a; padding: 8px 14px; border-radius: 20px;
+    font-size: 13px; font-weight: 600; user-select: none;
+    border: 1px solid #333856;
+  }
+  .toggle-chip.active { background: #16532a; border-color: #2f9e44; }
+  #autoToggle { cursor: default; }
+  .toggle-chip .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }
+  .toggle-chip.active .dot { background: var(--accent2); }
+
+  .bingo-board { margin-top: 16px; background: var(--card); border-radius: 16px; padding: 10px; }
+  .bingo-header { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; margin-bottom: 4px; }
+  .bingo-header div { text-align: center; font-weight: 800; border-radius: 6px; padding: 6px 0; color: #fff; }
+  .col-B { background: #f03e3e; }
+  .col-I { background: #f08c00; }
+  .col-N { background: #f1c40f; color:#241900 !important; }
+  .col-G { background: #2f9e44; }
+  .col-O { background: #1c7ed6; }
+
+  .board { display: grid; grid-template-columns: repeat(5, 1fr); grid-template-rows: repeat(15, 1fr); grid-auto-flow: column; gap: 4px; }
+  .board div {
+    aspect-ratio: 1; display: flex; align-items: center; justify-content: center;
+    background: #262b45; border-radius: 6px; font-size: 13px; color: var(--muted); font-weight: 600;
+  }
+  .board div.called { background: var(--accent2); color: #06210f; }
+
+  .actions { display: flex; gap: 10px; margin-top: 16px; }
+  button { border: none; border-radius: 12px; padding: 12px 16px; font-size: 15px; font-weight: 600; cursor: pointer; }
+  .btn-primary { background: var(--accent); color: #241900; flex: 1; }
+  .btn-outline { background: transparent; border: 1px solid var(--muted); color: var(--text); flex: 1; }
+  .btn-danger { background: var(--danger); color: #fff; }
+
+  .bottom-nav {
+    position: fixed; bottom: 0; left: 0; right: 0;
+    display: flex; background: var(--card); padding: 10px 16px; gap: 10px;
+    border-top: 1px solid #2a2f4a;
+  }
+  .bottom-nav button { flex: 1; }
+
+  .modal-overlay {
+    display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+    z-index: 20; align-items: flex-end; justify-content: center;
+  }
+  .modal-overlay.open { display: flex; }
+  .modal {
+    background: var(--card); width: 100%; max-width: 480px;
+    border-radius: 20px 20px 0 0; padding: 20px; max-height: 88vh; overflow-y: auto;
+    position: relative;
+  }
+  .modal h2 { margin-top: 0; }
+  .modal label { display: block; font-size: 13px; color: var(--muted); margin: 12px 0 6px; }
+  .modal input, .modal select {
+    width: 100%; padding: 12px; border-radius: 10px; border: 1px solid #333856;
+    background: #12152a; color: var(--text); font-size: 15px;
+  }
+  .method-card { background: #12152a; border: 1px solid #333856; border-radius: 12px; padding: 12px; margin-top: 10px; }
+  .method-card b { color: var(--accent); }
+  .method-card .num { font-size: 17px; letter-spacing: 1px; margin-top: 4px; }
+  .copy-btn { background: #2a2f4a; color: var(--text); padding: 4px 10px; border-radius: 8px; font-size: 12px; margin-left: 8px; }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 8px; }
+  .balance-split { display: flex; gap: 10px; margin-top: 10px; }
+  .balance-split div { flex: 1; background: #12152a; border-radius: 10px; padding: 10px; text-align: center; }
+  .balance-split b { display: block; font-size: 16px; }
+  .close-x { position: absolute; top: 16px; right: 20px; background: none; color: var(--muted); font-size: 22px; padding: 0; }
+  .status-msg { margin-top: 10px; font-size: 13px; }
+  .status-ok { color: var(--accent2); }
+  .status-err { color: var(--danger); }
+
+  .cartella-grid {
+    display: grid; grid-template-columns: repeat(8, 1fr); gap: 6px; margin-top: 12px;
+    max-height: 260px; overflow-y: auto;
+  }
+  .cartella-grid button { padding: 8px 0; font-size: 12px; border-radius: 8px; background: #12152a; color: var(--text); border: 1px solid #333856; }
+  .cartella-grid button.taken { opacity: 0.35; background: #2a2f4a; cursor: not-allowed; }
+  .cartella-grid button.bot { opacity: 0.5; background: #3a2a4a; cursor: not-allowed; }
+  .cartella-grid button.selected { background: var(--accent); color: #241900; font-weight: 800; }
+
+  /* Winner / round result banner */
+  .round-result-overlay {
+    display: none; position: fixed; inset: 0; z-index: 30;
+    background: rgba(0,0,0,0.75); align-items: center; justify-content: center; padding: 20px;
+  }
+  .round-result-overlay.open { display: flex; }
+  .round-result-card {
+    background: linear-gradient(160deg,#2f9e44,#1c6b30);
+    border-radius: 20px; padding: 26px 20px; text-align: center; max-width: 380px; width: 100%;
+  }
+  .round-result-card.refunded { background: linear-gradient(160deg,#555,#333); }
+  .round-result-card h2 { margin: 0 0 6px; font-size: 26px; }
+  .round-result-card .amount { font-size: 34px; font-weight: 800; color: #fff; margin: 10px 0; }
+  .round-result-card p { color: #eafff0; font-size: 14px; }
+  .round-result-card button { margin-top: 16px; background: #fff; color: #1c6b30; font-weight: 700; padding: 10px 20px; border-radius: 10px; }
+
+  .winner-window-banner {
+    display: none; background: #4a3a10; border: 1px solid var(--accent); border-radius: 12px;
+    padding: 10px; text-align: center; margin-bottom: 12px; font-size: 13px; color: var(--accent);
+  }
+  .winner-window-banner.visible { display: block; }
+
+  /* Loading / splash screen */
+  #loadingScreen {
+    position: fixed; inset: 0; z-index: 999;
+    background: radial-gradient(circle at 50% 20%, #4b3a86 0%, #241c46 45%, #100c26 100%);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    transition: opacity 0.5s ease;
+  }
+  #loadingScreen.hidden { opacity: 0; pointer-events: none; }
+  #loadingScreen .logo {
+    font-size: 40px; font-weight: 900; margin-bottom: 6px; letter-spacing: 1px;
+    background: linear-gradient(90deg, #ffd76a, #ffb020, #ffe9b0);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+    text-shadow: 0 0 30px rgba(255,193,77,0.35);
+  }
+  #loadingScreen .tagline { color: #cfc7ff; font-size: 13px; margin-bottom: 26px; letter-spacing: 2px; text-transform: uppercase; }
   #loadingScreen .spinner {
-    width: 34px;
-    height: 34px;
-    border: 4px solid rgba(255,255,255,0.4);
-    border-top-color: #fff;
-    border-radius: 50%;
-    animation: spin 0.8s linear infinite;
-    margin-bottom: 14px;
+    width: 40px; height: 40px; border: 4px solid rgba(255,214,120,0.25);
+    border-top-color: #ffc94d; border-radius: 50%; animation: spin 0.8s linear infinite; margin-bottom: 16px;
   }
-  #loadingScreen .loading-text {
-    color: #fff;
-    font-size: 16px;
-    opacity: 0.9;
+  #loadingScreen .loading-text { color: #fff; font-size: 15px; opacity: 0.9; }
+  #loadingScreen .balls {
+    display: flex; gap: 8px; margin-top: 22px;
   }
+  #loadingScreen .balls span {
+    width: 10px; height: 10px; border-radius: 50%; background: #ffc94d;
+    animation: bounce 1.2s infinite ease-in-out;
+  }
+  #loadingScreen .balls span:nth-child(2) { animation-delay: 0.15s; background:#ff8fa3; }
+  #loadingScreen .balls span:nth-child(3) { animation-delay: 0.3s; background:#7ed6a5; }
+  #loadingScreen .balls span:nth-child(4) { animation-delay: 0.45s; background:#6fa8ff; }
   @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes bounce { 0%, 80%, 100% { transform: translateY(0); opacity: 0.6; } 40% { transform: translateY(-8px); opacity: 1; } }
 </style>
 </head>
 <body>
 
 <div id="loadingScreen">
   <div class="logo">ዘመን ቢንጎ</div>
+  <div class="tagline">Zemen Bingo</div>
   <div class="spinner"></div>
   <div class="loading-text">Loading game...</div>
+  <div class="balls"><span></span><span></span><span></span><span></span></div>
 </div>
 
 <header>
@@ -433,6 +362,11 @@
 </header>
 
 <main>
+  <div class="spectator-banner" id="spectatorBanner">
+    <span>👀 ተመልካች ሁነታ - ገንዘብ ያስገቡ ይጫወቱ (Spectator mode - deposit to play)</span>
+    <button id="spectatorDepositBtn">ገቢ (Deposit)</button>
+  </div>
+
   <div class="stats-bar">
     <div class="stat-pill stat-players">👥 Players: <span id="statPlayers">0</span></div>
     <div class="stat-pill stat-prize">💰 ደራሽ: <span id="statPrize">0</span></div>
@@ -440,11 +374,15 @@
     <div class="stat-pill stat-calls">📢 Calls: <span id="statCalls">0</span></div>
   </div>
 
-  <button class="cartella-btn" style="width:100%;margin-bottom:14px" id="openCartella">🎫 ካርቴላ ምረጥ (Pick Cartella) — <span id="myCartellaLabel">አልተመረጠም</span></button>
+  <button class="cartella-btn" id="openCartella">🎫 ካርቴላ ምረጥ (Pick Cartella) — <span id="myCartellaLabel">አልተመረጠም</span></button>
+
+  <div class="winner-window-banner" id="winnerWindowBanner"></div>
 
   <div class="my-card-widget" id="myCardWidget">
     <div class="my-card-header">Cartella <b id="myCardId">#--</b></div>
     <div class="my-card-grid" id="myCardGrid"></div>
+    <button class="bingo-btn" id="claimBingoBtn" disabled>🏆 ቢንጎ! (Claim Bingo)</button>
+    <div class="status-msg" id="bingoStatus"></div>
   </div>
 
   <div class="caller-box">
@@ -547,10 +485,21 @@
   <div class="modal">
     <button class="close-x" data-close="cartellaOverlay">✕</button>
     <h2>ካርቴላ ይምረጡ (Pick your cartella)</h2>
-    <p class="hint">ከ1 እስከ 200 ካርቴላዎች አሉ። የተመረጡ (ግራጫ) ካርቴላዎች ሊመረጡ አይችሉም።</p>
+    <p class="hint">ከ1 እስከ 200 ካርቴላዎች አሉ። ግራጫ ካርቴላዎች ሊመረጡ አይችሉም። ካርቴላ ሲመርጡ <b id="cartellaStakeLabel">10</b> ብር ይያዛል።</p>
     <div class="cartella-grid" id="cartellaGrid"></div>
     <div class="status-msg" id="cartellaStatus"></div>
     <button class="btn-primary" style="width:100%;margin-top:14px" id="confirmCartella" disabled>አረጋግጥ (Confirm)</button>
+  </div>
+</div>
+
+<!-- Round Result Overlay -->
+<div class="round-result-overlay" id="roundResultOverlay">
+  <div class="round-result-card" id="roundResultCard">
+    <h2 id="roundResultTitle">🎉 BINGO!</h2>
+    <p id="roundResultSubtitle">Round finished</p>
+    <div class="amount" id="roundResultAmount">0 ብር</div>
+    <p id="roundResultDetail"></p>
+    <button id="closeRoundResult">Close</button>
   </div>
 </div>
 
@@ -566,9 +515,10 @@ const TELEGRAM_ID = tgUser ? String(tgUser.id) : (localStorage.getItem('demo_uid
   return id;
 })());
 const USERNAME = tgUser ? (tgUser.username || tgUser.first_name) : 'guest';
-const ROOM_ID = 'main-room'; // change if you support multiple simultaneous game rooms
+const ROOM_ID = 'main-room';
+let STAKE = 10; // overwritten by the server's authoritative value on connect
 
-/* ---------------- Amharic number words (1-90) ---------------- */
+/* ---------------- Amharic number words (1-90, only 1-75 used) ---------------- */
 const AMHARIC_NUMBERS = {
   1:'አንድ',2:'ሁለት',3:'ሶስት',4:'አራት',5:'አምስት',6:'ስድስት',7:'ሰባት',8:'ስምንት',9:'ዘጠኝ',10:'አስር',
   11:'አስራ አንድ',12:'አስራ ሁለት',13:'አስራ ሶስት',14:'አስራ አራት',15:'አስራ አምስት',16:'አስራ ስድስት',17:'አስራ ሰባት',18:'አስራ ስምንት',19:'አስራ ዘጠኝ',20:'ሃያ',
@@ -577,8 +527,7 @@ const AMHARIC_NUMBERS = {
   41:'አርባ አንድ',42:'አርባ ሁለት',43:'አርባ ሶስት',44:'አርባ አራት',45:'አርባ አምስት',46:'አርባ ስድስት',47:'አርባ ሰባት',48:'አርባ ስምንት',49:'አርባ ዘጠኝ',50:'ሃምሳ',
   51:'ሃምሳ አንድ',52:'ሃምሳ ሁለት',53:'ሃምሳ ሶስት',54:'ሃምሳ አራት',55:'ሃምሳ አምስት',56:'ሃምሳ ስድስት',57:'ሃምሳ ሰባት',58:'ሃምሳ ስምንት',59:'ሃምሳ ዘጠኝ',60:'ስልሳ',
   61:'ስልሳ አንድ',62:'ስልሳ ሁለት',63:'ስልሳ ሶስት',64:'ስልሳ አራት',65:'ስልሳ አምስት',66:'ስልሳ ስድስት',67:'ስልሳ ሰባት',68:'ስልሳ ስምንት',69:'ስልሳ ዘጠኝ',70:'ሰባ',
-  71:'ሰባ አንድ',72:'ሰባ ሁለት',73:'ሰባ ሶስት',74:'ሰባ አራት',75:'ሰባ አምስት',76:'ሰባ ስድስት',77:'ሰባ ሰባት',78:'ሰባ ስምንት',79:'ሰባ ዘጠኝ',80:'ሰማንያ',
-  81:'ሰማንያ አንድ',82:'ሰማንያ ሁለት',83:'ሰማንያ ሶስት',84:'ሰማንያ አራት',85:'ሰማንያ አምስት',86:'ሰማንያ ስድስት',87:'ሰማንያ ሰባት',88:'ሰማንያ ስምንት',89:'ሰማንያ ዘጠኝ',90:'ዘጠና'
+  71:'ሰባ አንድ',72:'ሰባ ሁለት',73:'ሰባ ሶስት',74:'ሰባ አራት',75:'ሰባ አምስት'
 };
 
 /* ---------------- Amharic voice caller (Web Speech API) ---------------- */
@@ -591,12 +540,11 @@ if (window.speechSynthesis) {
   loadVoices();
   window.speechSynthesis.onvoiceschanged = loadVoices;
 }
-
 function speakNumber(n) {
   const phrase = `ቁጥር ${AMHARIC_NUMBERS[n] || n}`;
   document.getElementById('callerAmharic').textContent = phrase;
-  if (!window.speechSynthesis) return; // silently skip if unsupported
-  window.speechSynthesis.cancel(); // stop any overlapping speech
+  if (!window.speechSynthesis) return;
+  window.speechSynthesis.cancel();
   const utter = new SpeechSynthesisUtterance(phrase);
   utter.lang = 'am-ET';
   if (amharicVoice) utter.voice = amharicVoice;
@@ -606,8 +554,8 @@ function speakNumber(n) {
 
 /* ---------------- Board rendering (classic 1-75 B-I-N-G-O columns) ---------------- */
 const board = document.getElementById('board');
-const STAKE = 10; // Birr per cartella - static display value, wire this to real betting logic when you add it
 document.getElementById('statStake').textContent = STAKE;
+document.getElementById('cartellaStakeLabel').textContent = STAKE;
 
 for (let i = 1; i <= 75; i++) {
   const cell = document.createElement('div');
@@ -615,7 +563,6 @@ for (let i = 1; i <= 75; i++) {
   cell.textContent = i;
   board.appendChild(cell);
 }
-
 function letterFor(n) {
   if (n <= 15) return 'B';
   if (n <= 30) return 'I';
@@ -623,14 +570,15 @@ function letterFor(n) {
   if (n <= 60) return 'G';
   return 'O';
 }
-
 function markCalled(numbers) {
   numbers.forEach(n => {
     const cell = document.getElementById('cell-' + n);
     if (cell) cell.classList.add('called');
   });
 }
-
+function clearBoard() {
+  document.querySelectorAll('.board div').forEach(c => c.classList.remove('called'));
+}
 function renderLastCalled(calledNumbers) {
   const row = document.getElementById('lastCalledRow');
   row.innerHTML = '';
@@ -643,18 +591,20 @@ function renderLastCalled(calledNumbers) {
   });
 }
 
-/* ---------------- Socket.io: real-time number calling ---------------- */
+/* ---------------- Socket.io ---------------- */
 const socket = io();
 socket.emit('joinRoom', ROOM_ID);
 
 socket.on('roomState', (state) => {
-  document.querySelectorAll('.board div').forEach(c => c.classList.remove('called'));
+  clearBoard();
   markCalled(state.calledNumbers || []);
   renderLastCalled(state.calledNumbers || []);
   document.getElementById('statCalls').textContent = (state.calledNumbers || []).length;
-  if (typeof state.playerCount === 'number') {
-    document.getElementById('statPlayers').textContent = state.playerCount;
-    document.getElementById('statPrize').textContent = state.playerCount * STAKE;
+  if (typeof state.playerCount === 'number') document.getElementById('statPlayers').textContent = state.playerCount;
+  if (state.stake) {
+    STAKE = state.stake;
+    document.getElementById('statStake').textContent = STAKE;
+    document.getElementById('cartellaStakeLabel').textContent = STAKE;
   }
   daubMyCard(state.calledNumbers || []);
 });
@@ -668,11 +618,15 @@ socket.on('numberCalled', (data) => {
   if (soundOn) speakNumber(data.number);
   else document.getElementById('callerAmharic').textContent = `ቁጥር ${AMHARIC_NUMBERS[data.number] || data.number}`;
   daubMyCard(data.calledNumbers);
+  updateBingoButtonState();
 });
 
 socket.on('playerCount', (count) => {
   document.getElementById('statPlayers').textContent = count;
-  document.getElementById('statPrize').textContent = count * STAKE;
+});
+
+socket.on('potUpdate', (data) => {
+  document.getElementById('statPrize').textContent = data.pot;
 });
 
 socket.on('gameOver', () => {
@@ -685,22 +639,64 @@ socket.on('callingState', (state) => {
   document.getElementById('autoStatusText').textContent = state.active ? 'ON' : 'OFF';
 });
 
-/* ---------------- Sound toggle ----------------
-   Note: "Auto" is a room-wide, server-controlled status (shown above, not clickable) —
-   this keeps the game fair, since no single player can pause calling for everyone else.
-   Only Sound (this player's own Amharic voice) is under the player's control. */
-let soundOn = true;
+socket.on('winnerWindowOpen', (data) => {
+  const banner = document.getElementById('winnerWindowBanner');
+  banner.classList.add('visible');
+  let secondsLeft = data.seconds;
+  banner.textContent = `🏆 አንድ ሰው ቢንጎ ብሏል! ሌሎች ተጫዋቾች በ${secondsLeft} ሰከንድ ውስጥ መጠየቅ ይችላሉ...`;
+  const timer = setInterval(() => {
+    secondsLeft -= 1;
+    if (secondsLeft <= 0) { clearInterval(timer); banner.classList.remove('visible'); return; }
+    banner.textContent = `🏆 አንድ ሰው ቢንጎ ብሏል! ሌሎች ተጫዋቾች በ${secondsLeft} ሰከንድ ውስጥ መጠየቅ ይችላሉ...`;
+  }, 1000);
+});
 
+socket.on('roundResult', (data) => {
+  document.getElementById('winnerWindowBanner').classList.remove('visible');
+  const card = document.getElementById('roundResultCard');
+  const iAmWinner = data.winners && data.winners.some(w => w.telegram_id === TELEGRAM_ID);
+
+  if (data.refunded) {
+    card.classList.add('refunded');
+    document.getElementById('roundResultTitle').textContent = '↩️ ማንም አላሸነፈም';
+    document.getElementById('roundResultSubtitle').textContent = 'ቁጥሮች አልቀዋል - ገንዘብዎ ተመላሽ ሆኗል (No winner - stakes refunded)';
+    document.getElementById('roundResultAmount').textContent = `${data.pot} ብር`;
+    document.getElementById('roundResultDetail').textContent = '';
+  } else {
+    card.classList.remove('refunded');
+    document.getElementById('roundResultTitle').textContent = iAmWinner ? '🎉 እንኳን ደስ አለዎት!' : '🏆 BINGO!';
+    document.getElementById('roundResultSubtitle').textContent = `${data.winners.length} አሸናፊ(ዎች) - ደራሽ ${data.pot} ብር ላይ 30% ኮሚሽን ተቀናሽ ሆኗል`;
+    document.getElementById('roundResultAmount').textContent = `${data.share} ብር ${iAmWinner ? '(የእርስዎ ድርሻ)' : 'ለእያንዳንዱ አሸናፊ'}`;
+    document.getElementById('roundResultDetail').textContent = `ጠቅላላ ደራሽ: ${data.pot} ብር | መድረክ ኮሚሽን (30%): ${data.commission} ብር`;
+  }
+  document.getElementById('roundResultOverlay').classList.add('open');
+  resetLocalRoundState();
+  refreshWallet();
+});
+document.getElementById('closeRoundResult').onclick = () => document.getElementById('roundResultOverlay').classList.remove('open');
+
+function resetLocalRoundState() {
+  myCartellaId = null;
+  myCard = null;
+  document.getElementById('myCartellaLabel').textContent = 'አልተመረጠም';
+  document.getElementById('myCardWidget').classList.remove('visible');
+  document.getElementById('callerNumber').textContent = '--';
+  document.getElementById('callerAmharic').textContent = 'ጨዋታ ይጀምሩ';
+}
+
+/* ---------------- Sound toggle (Auto is server-controlled / read-only, see callingState) ---------------- */
+let soundOn = true;
 document.getElementById('soundToggle').onclick = () => {
   soundOn = !soundOn;
   document.getElementById('soundToggle').classList.toggle('active', soundOn);
   if (!soundOn && window.speechSynthesis) window.speechSynthesis.cancel();
 };
 
-/* ---------------- Cartella (200 tickets) ---------------- */
+/* ---------------- Cartella (200 tickets, bots fill empty seats) ---------------- */
 let myCartellaId = null;
-let myCard = null; // [ [B..5], [I..5], [N..5 w/ 'FREE'], [G..5], [O..5] ]
+let myCard = null;
 let takenCartellas = {};
+let botCartellas = new Set();
 let pendingSelection = null;
 
 const cartellaGrid = document.getElementById('cartellaGrid');
@@ -709,7 +705,7 @@ for (let i = 1; i <= 200; i++) {
   btn.textContent = i;
   btn.dataset.id = i;
   btn.onclick = () => {
-    if (btn.classList.contains('taken')) return;
+    if (btn.classList.contains('taken') || btn.classList.contains('bot')) return;
     pendingSelection = i;
     document.querySelectorAll('.cartella-grid button').forEach(b => b.classList.remove('selected'));
     btn.classList.add('selected');
@@ -722,7 +718,8 @@ function renderCartellaGrid() {
   document.querySelectorAll('.cartella-grid button').forEach(btn => {
     const id = Number(btn.dataset.id);
     const ownedByOther = takenCartellas[id] && takenCartellas[id] !== TELEGRAM_ID;
-    btn.classList.toggle('taken', !!ownedByOther);
+    btn.classList.toggle('bot', botCartellas.has(id));
+    btn.classList.toggle('taken', !!ownedByOther && !botCartellas.has(id));
     btn.classList.toggle('selected', id === myCartellaId);
   });
 }
@@ -731,7 +728,6 @@ document.getElementById('openCartella').onclick = () => {
   document.getElementById('cartellaOverlay').classList.add('open');
   renderCartellaGrid();
 };
-
 document.getElementById('confirmCartella').onclick = () => {
   if (!pendingSelection) return;
   socket.emit('selectCartella', { roomId: ROOM_ID, cartellaId: pendingSelection, telegram_id: TELEGRAM_ID });
@@ -739,6 +735,7 @@ document.getElementById('confirmCartella').onclick = () => {
 
 socket.on('cartellaState', (state) => {
   takenCartellas = state.taken || {};
+  botCartellas = new Set((state.bots || []).map(b => b.cartellaId));
   renderCartellaGrid();
 });
 
@@ -746,6 +743,10 @@ socket.on('cartellaError', (err) => {
   const statusEl = document.getElementById('cartellaStatus');
   statusEl.className = 'status-msg status-err';
   statusEl.textContent = err.message;
+  if (err.code === 'INSUFFICIENT_BALANCE') {
+    document.getElementById('cartellaOverlay').classList.remove('open');
+    showSpectatorBanner();
+  }
 });
 
 socket.on('cartellaAssigned', (data) => {
@@ -754,6 +755,7 @@ socket.on('cartellaAssigned', (data) => {
   document.getElementById('cartellaStatus').textContent = '';
   document.getElementById('cartellaOverlay').classList.remove('open');
   document.getElementById('myCartellaLabel').textContent = `#${myCartellaId}`;
+  hideSpectatorBanner();
   renderMyCard();
 });
 
@@ -765,7 +767,7 @@ function renderMyCard() {
 
   const grid = document.getElementById('myCardGrid');
   grid.innerHTML = '';
-  ['B', 'I', 'N', 'G', 'O'].forEach((letter, colIdx) => {
+  ['B', 'I', 'N', 'G', 'O'].forEach((letter) => {
     const hdr = document.createElement('div');
     hdr.className = `hdr col-${letter}`;
     hdr.textContent = letter;
@@ -783,6 +785,7 @@ function renderMyCard() {
     }
   }
   daubMyCard(currentCalledNumbers);
+  updateBingoButtonState();
 }
 
 let currentCalledNumbers = [];
@@ -796,6 +799,32 @@ function daubMyCard(calledNumbers) {
   });
 }
 
+function updateBingoButtonState() {
+  document.getElementById('claimBingoBtn').disabled = !myCard;
+}
+
+document.getElementById('claimBingoBtn').onclick = () => {
+  socket.emit('claimBingo', { roomId: ROOM_ID, telegram_id: TELEGRAM_ID });
+};
+socket.on('bingoError', (err) => {
+  const el = document.getElementById('bingoStatus');
+  el.className = 'status-msg status-err';
+  el.textContent = err.message;
+  setTimeout(() => { el.textContent = ''; }, 3500);
+});
+socket.on('winnerClaimed', (data) => {
+  if (data.telegram_id === TELEGRAM_ID) {
+    const el = document.getElementById('bingoStatus');
+    el.className = 'status-msg status-ok';
+    el.textContent = '✅ ቢንጎዎ ትክክል ነው! ውጤቱን በመጠባበቅ ላይ...';
+  }
+});
+
+/* ---------------- Spectator mode (insufficient balance) ---------------- */
+function showSpectatorBanner() { document.getElementById('spectatorBanner').classList.add('visible'); }
+function hideSpectatorBanner() { document.getElementById('spectatorBanner').classList.remove('visible'); }
+document.getElementById('spectatorDepositBtn').onclick = () => document.getElementById('depositOverlay').classList.add('open');
+
 /* ---------------- Wallet ---------------- */
 async function refreshWallet() {
   const res = await fetch(`/api/wallet/${TELEGRAM_ID}?username=${encodeURIComponent(USERNAME)}`);
@@ -804,6 +833,7 @@ async function refreshWallet() {
     `<b>${data.balance_real} ብር</b><small>ቦነስ: ${data.balance_bonus} ብር</small>`;
   document.getElementById('wdRealBalance').textContent = data.balance_real + ' ብር';
   document.getElementById('wdBonusBalance').textContent = data.balance_bonus + ' ብር';
+  if (data.total_balance < STAKE && !myCard) showSpectatorBanner(); else hideSpectatorBanner();
   return data;
 }
 
@@ -811,25 +841,17 @@ async function refreshWallet() {
 let socketReady = false;
 let walletReady = false;
 function maybeHideLoading() {
-  if (socketReady && walletReady) {
-    document.getElementById('loadingScreen').classList.add('hidden');
-  }
+  if (socketReady && walletReady) document.getElementById('loadingScreen').classList.add('hidden');
 }
 socket.on('connect', () => { socketReady = true; maybeHideLoading(); });
-// Failsafe: never block the UI for more than 4s even if something is slow/offline.
-setTimeout(() => { socketReady = true; walletReady = true; maybeHideLoading(); }, 4000);
+setTimeout(() => { socketReady = true; walletReady = true; maybeHideLoading(); }, 4000); // failsafe
 
 refreshWallet().then(() => { walletReady = true; maybeHideLoading(); }).catch(() => { walletReady = true; maybeHideLoading(); });
 
 /* ---------------- Modal open/close ---------------- */
 document.getElementById('openDeposit').onclick = () => document.getElementById('depositOverlay').classList.add('open');
-document.getElementById('openWithdraw').onclick = async () => {
-  await refreshWallet();
-  document.getElementById('withdrawOverlay').classList.add('open');
-};
-document.querySelectorAll('[data-close]').forEach(btn => {
-  btn.onclick = () => document.getElementById(btn.dataset.close).classList.remove('open');
-});
+document.getElementById('openWithdraw').onclick = async () => { await refreshWallet(); document.getElementById('withdrawOverlay').classList.add('open'); };
+document.querySelectorAll('[data-close]').forEach(btn => { btn.onclick = () => document.getElementById(btn.dataset.close).classList.remove('open'); });
 document.querySelectorAll('.copy-btn').forEach(btn => {
   btn.onclick = () => {
     navigator.clipboard.writeText(btn.dataset.copy);
