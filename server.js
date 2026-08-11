@@ -14,7 +14,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 
 // Import game logic modules
-const gameLogic = require('./game-logic');
+const GameLogic = require('./game-logic.js');
 const kenoLogic = require('./keno-logic');
 const crashLogic = require('./crash-logic');
 const slotsLogic = require('./slots-logic');
