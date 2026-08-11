@@ -1,514 +1,520 @@
-// ===============================
-// Telegram Bingo Server
-// ===============================
-// Set your Bot Token as an environment variable:
-//   export BOT_TOKEN=123456:ABC-DEF1234gh...
-// ===============================
+/**
+ * Telegram Bingo Mini App - Backend
+ * Express + Socket.io + SQLite (better-sqlite3) + Telegram Bot (node-telegram-bot-api)
+ *
+ * ENV VARS REQUIRED (put these in a .env file or your host's env settings):
+ *   BOT_TOKEN        - Telegram bot token from @BotFather
+ *   ADMIN_CHAT_ID     - Your personal Telegram chat id (the admin who approves deposits/withdrawals)
+ *   ADMIN_DASHBOARD_KEY - a secret string used to protect the /admin dashboard routes
+ *   PORT              - optional, defaults to 3000
+ *
+ * NOTE ON COMPLIANCE:
+ *   This app moves real money in/out of user wallets. Before going live, make sure
+ *   running a paid bingo game with real-money deposits/withdrawals is legal in the
+ *   jurisdiction you operate in, and that you hold any required gambling/payment license.
+ */
 
+require('dotenv').config();
 const express = require('express');
 const http = require('http');
-const { Server } = require('socket.io');
-const Database = require('better-sqlite3');
-const multer = require('multer');
 const path = require('path');
-const crypto = require('crypto');
-const { v4: uuidv4 } = require('uuid');
-const { getAudioUrl } = require('google-tts-api');
+const multer = require('multer');
+const fs = require('fs');
+const Database = require('better-sqlite3');
+const { Server } = require('socket.io');
+const TelegramBot = require('node-telegram-bot-api');
 
+const PORT = process.env.PORT || 3000;
+const BOT_TOKEN = process.env.BOT_TOKEN;
+const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID;
+const ADMIN_DASHBOARD_KEY = process.env.ADMIN_DASHBOARD_KEY || 'change-me';
+
+const MIN_DEPOSIT = 50;
+const MIN_WITHDRAW = 100;
+const SIGNUP_BONUS = 150; // Birr, credited to balance_bonus for brand new users (non-withdrawable)
+
+// ---------- App / Server setup ----------
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
-const BOT_TOKEN = process.env.BOT_TOKEN || 'YOUR_BOT_TOKEN'; // <-- PLUG YOUR TOKEN HERE
-const ADMIN_KEY = process.env.ADMIN_KEY || 'super-secret-admin-key'; // change in production
-const PORT = process.env.PORT || 3000;
+app.use(express.json());
+app.use(express.static(path.join(__dirname, 'public')));
 
-// ---------- Database Setup ----------
-const db = new Database('bingo.db');
+const uploadsDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+app.use('/uploads', express.static(uploadsDir));
+
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, uploadsDir),
+    filename: (req, file, cb) => {
+      const ext = path.extname(file.originalname) || '.jpg';
+      cb(null, `receipt_${Date.now()}_${Math.round(Math.random() * 1e6)}${ext}`);
+    }
+  }),
+  limits: { fileSize: 5 * 1024 * 1024 }
+});
+
+// ---------- Database ----------
+const db = new Database(path.join(__dirname, 'bingo.db'));
 db.pragma('journal_mode = WAL');
 
 db.exec(`
-  CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY,
-    telegram_id TEXT UNIQUE,
-    username TEXT,
-    first_seen TEXT DEFAULT (datetime('now'))
-  );
-  CREATE TABLE IF NOT EXISTS wallets (
-    user_id INTEGER PRIMARY KEY,
-    balance REAL DEFAULT 100,   -- 100 Birr welcome bonus
-    FOREIGN KEY(user_id) REFERENCES users(id)
-  );
-  CREATE TABLE IF NOT EXISTS transactions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER,
-    type TEXT,   -- 'purchase', 'deposit', 'withdrawal', 'win', 'bonus'
-    amount REAL,
-    detail TEXT,
-    created_at TEXT DEFAULT (datetime('now'))
-  );
-  CREATE TABLE IF NOT EXISTS deposit_requests (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER,
-    amount REAL,
-    screenshot_path TEXT,
-    status TEXT DEFAULT 'pending',   -- pending, approved, rejected
-    created_at TEXT DEFAULT (datetime('now'))
-  );
-  CREATE TABLE IF NOT EXISTS withdrawal_requests (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER,
-    amount REAL,
-    account_details TEXT,
-    status TEXT DEFAULT 'pending',
-    created_at TEXT DEFAULT (datetime('now'))
-  );
-  CREATE TABLE IF NOT EXISTS game_state (
-    key TEXT PRIMARY KEY,
-    value TEXT
-  );
-  CREATE TABLE IF NOT EXISTS game_cards (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    round_id INTEGER,
-    user_id INTEGER,
-    numbers TEXT,  -- JSON array of 25 numbers (middle = 0)
-    marked TEXT DEFAULT '[]',  -- JSON array of marked indices
-    is_winner INTEGER DEFAULT 0
-  );
-  CREATE TABLE IF NOT EXISTS drawn_numbers (
-    round_id INTEGER,
-    number INTEGER,
-    drawn_at TEXT DEFAULT (datetime('now'))
-  );
+CREATE TABLE IF NOT EXISTS users (
+  telegram_id TEXT PRIMARY KEY,
+  username TEXT,
+  balance_real INTEGER NOT NULL DEFAULT 0,   -- withdrawable balance (deposits + real winnings), in Birr
+  balance_bonus INTEGER NOT NULL DEFAULT 0,  -- non-withdrawable bonus balance, in Birr
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS deposits (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  telegram_id TEXT NOT NULL,
+  amount INTEGER NOT NULL,
+  method TEXT NOT NULL,
+  txn_id TEXT NOT NULL,
+  screenshot_path TEXT,
+  status TEXT NOT NULL DEFAULT 'pending', -- pending | approved | rejected
+  created_at TEXT DEFAULT (datetime('now')),
+  resolved_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS withdrawals (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  telegram_id TEXT NOT NULL,
+  amount INTEGER NOT NULL,
+  account_info TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending', -- pending | approved | rejected | paid
+  created_at TEXT DEFAULT (datetime('now')),
+  resolved_at TEXT
+);
 `);
 
-// Initialize game state if missing
-const initState = db.prepare('INSERT OR IGNORE INTO game_state (key, value) VALUES (?, ?)');
-initState.run('current_round', '0');
-initState.run('status', 'idle');        // idle | active | finished
-initState.run('pot', '0');
-initState.run('total_cards', '200');
-initState.run('sold_cards', '0');
-initState.run('drawn_index', '0');
-initState.run('last_draw_time', '0');
-
-// Helper: read game state
-function getGameState() {
-  const row = db.prepare('SELECT key, value FROM game_state').all();
-  const state = {};
-  row.forEach(r => { state[r.key] = r.value; });
-  state.pot = parseFloat(state.pot);
-  state.total_cards = parseInt(state.total_cards);
-  state.sold_cards = parseInt(state.sold_cards);
-  state.current_round = parseInt(state.current_round);
-  state.drawn_index = parseInt(state.drawn_index);
-  return state;
-}
-
-function setGameState(key, value) {
-  db.prepare('UPDATE game_state SET value = ? WHERE key = ?').run(String(value), key);
-}
-
-// ---------- Multer for file uploads ----------
-const storage = multer.diskStorage({
-  destination: 'uploads/',
-  filename: (req, file, cb) => cb(null, Date.now() + '-' + file.originalname)
-});
-const upload = multer({ storage });
-
-app.use(express.json());
-app.use(express.static('public'));
-app.use('/uploads', express.static('uploads'));
-
-// ---------- Telegram initData verification ----------
-function validateInitData(initData) {
-  const data = Object.fromEntries(new URLSearchParams(initData));
-  const hash = data.hash;
-  delete data.hash;
-  const checkString = Object.keys(data)
-    .sort()
-    .map(k => `${k}=${data[k]}`)
-    .join('\n');
-  const secretKey = crypto.createHmac('sha256', 'WebAppData').update(BOT_TOKEN).digest();
-  const calculatedHash = crypto.createHmac('sha256', secretKey).update(checkString).digest('hex');
-  return calculatedHash === hash;
-}
-
-// ---------- Auth endpoint ----------
-app.post('/auth', (req, res) => {
-  const { initData } = req.body;
-  if (!initData) return res.status(400).json({ error: 'Missing initData' });
-  if (!validateInitData(initData)) return res.status(403).json({ error: 'Invalid data' });
-
-  const params = Object.fromEntries(new URLSearchParams(initData));
-  const userData = JSON.parse(params.user || '{}');
-  const telegramId = String(userData.id);
-  const username = userData.username || userData.first_name || 'Player';
-
-  let user = db.prepare('SELECT * FROM users WHERE telegram_id = ?').get(telegramId);
-  let isNew = false;
+function getOrCreateUser(telegram_id, username) {
+  let user = db.prepare('SELECT * FROM users WHERE telegram_id = ?').get(telegram_id);
   if (!user) {
-    const result = db.prepare('INSERT INTO users (telegram_id, username) VALUES (?, ?)').run(telegramId, username);
-    user = { id: result.lastInsertRowid, telegram_id: telegramId, username };
-    isNew = true;
-    // Welcome bonus
-    db.prepare('INSERT INTO wallets (user_id, balance) VALUES (?, 100)').run(user.id);
-    db.prepare("INSERT INTO transactions (user_id, type, amount, detail) VALUES (?, 'bonus', 100, 'Welcome bonus')").run(user.id);
+    // Brand new user: create the account and credit the signup bonus.
+    // This goes to balance_bonus, which can be used to play but can never be withdrawn.
+    db.prepare('INSERT INTO users (telegram_id, username, balance_real, balance_bonus) VALUES (?, ?, 0, ?)')
+      .run(telegram_id, username || null, SIGNUP_BONUS);
+    user = db.prepare('SELECT * FROM users WHERE telegram_id = ?').get(telegram_id);
+  } else if (username && user.username !== username) {
+    db.prepare('UPDATE users SET username = ? WHERE telegram_id = ?').run(username, telegram_id);
   }
-
-  const wallet = db.prepare('SELECT balance FROM wallets WHERE user_id = ?').get(user.id);
-  res.json({
-    userId: user.id,
-    telegramId: user.telegram_id,
-    username: user.username,
-    balance: wallet ? wallet.balance : 100,
-    isNew
-  });
-});
-
-// ---------- Buy Card ----------
-app.post('/buy-card', (req, res) => {
-  const { userId } = req.body;
-  if (!userId) return res.status(400).json({ error: 'Missing userId' });
-
-  const state = getGameState();
-  if (state.status !== 'idle') return res.status(400).json({ error: 'Game already started' });
-  if (state.sold_cards >= state.total_cards) return res.status(400).json({ error: 'All cards sold' });
-
-  const wallet = db.prepare('SELECT balance FROM wallets WHERE user_id = ?').get(userId);
-  if (!wallet || wallet.balance < 10) return res.status(400).json({ error: 'Insufficient balance' });
-
-  // Deduct 10 Birr
-  db.prepare('UPDATE wallets SET balance = balance - 10 WHERE user_id = ?').run(userId);
-  db.prepare("INSERT INTO transactions (user_id, type, amount, detail) VALUES (?, 'purchase', -10, 'Card purchase')").run(userId);
-
-  // Generate Bingo card
-  const numbers = generateCardNumbers();
-  const cardId = db.prepare(
-    'INSERT INTO game_cards (round_id, user_id, numbers) VALUES (?, ?, ?)'
-  ).run(state.current_round, userId, JSON.stringify(numbers)).lastInsertRowid;
-
-  // Update game state: 7 Birr to pot, 3 Birr commission (handled via pot logic)
-  const newPot = state.pot + 7;
-  const newSold = state.sold_cards + 1;
-  setGameState('pot', newPot);
-  setGameState('sold_cards', newSold);
-
-  // Broadcast updated pot & sold count
-  io.emit('game_update', {
-    pot: newPot,
-    soldCards: newSold,
-    totalCards: state.total_cards,
-    status: state.status
-  });
-
-  res.json({
-    success: true,
-    cardId,
-    numbers,
-    balance: wallet.balance - 10
-  });
-});
-
-// ---------- Generate a Bingo card ----------
-function generateCardNumbers() {
-  const ranges = [
-    [1, 15], [16, 30], [31, 45], [46, 60], [61, 75]
-  ];
-  const card = [];
-  for (const [min, max] of ranges) {
-    const col = [];
-    while (col.length < 5) {
-      const num = Math.floor(Math.random() * (max - min + 1)) + min;
-      if (!col.includes(num)) col.push(num);
-    }
-    card.push(...col);
-  }
-  card[12] = 0; // middle free cell
-  return card;
+  return user;
 }
 
-// ---------- Get game state & user cards ----------
-app.get('/game-state', (req, res) => {
-  const userId = req.query.userId;
-  const state = getGameState();
-  const drawn = db.prepare('SELECT number FROM drawn_numbers WHERE round_id = ? ORDER BY drawn_at').all(state.current_round).map(r => r.number);
-  let userCards = [];
-  if (userId) {
-    userCards = db.prepare('SELECT * FROM game_cards WHERE round_id = ? AND user_id = ?').all(state.current_round, userId);
-  }
-  const wallet = userId ? db.prepare('SELECT balance FROM wallets WHERE user_id = ?').get(userId) : null;
+// ---------- Telegram Bot ----------
+let bot = null;
+if (BOT_TOKEN) {
+  bot = new TelegramBot(BOT_TOKEN, { polling: true });
 
+  bot.onText(/\/start/, (msg) => {
+    getOrCreateUser(String(msg.chat.id), msg.from.username || msg.from.first_name);
+    bot.sendMessage(msg.chat.id, 'Welcome to Bingo! Open the mini app to play, deposit, and withdraw.');
+  });
+
+  // Admin approves/rejects deposits and withdrawals via inline buttons
+  bot.on('callback_query', async (query) => {
+    if (String(query.message.chat.id) !== String(ADMIN_CHAT_ID)) {
+      return bot.answerCallbackQuery(query.id, { text: 'Not authorized.' });
+    }
+    const [action, type, id] = query.data.split(':'); // e.g. "approve:deposit:12"
+
+    try {
+      if (type === 'deposit') {
+        const result = action === 'approve' ? approveDeposit(id) : rejectDeposit(id);
+        await bot.editMessageText(
+          `${query.message.text}\n\n${action === 'approve' ? '✅ APPROVED' : '❌ REJECTED'}`,
+          { chat_id: query.message.chat.id, message_id: query.message.message_id }
+        );
+        if (action === 'approve' && result.telegram_id) {
+          bot.sendMessage(result.telegram_id, `✅ Your deposit of ${result.amount} Birr has been approved. New balance: ${result.balance_real} Birr.`).catch(() => {});
+        } else if (result.telegram_id) {
+          bot.sendMessage(result.telegram_id, `❌ Your deposit of ${result.amount} Birr was rejected. Contact support if this is unexpected.`).catch(() => {});
+        }
+      } else if (type === 'withdraw') {
+        const result = action === 'approve' ? approveWithdrawal(id) : rejectWithdrawal(id);
+        await bot.editMessageText(
+          `${query.message.text}\n\n${action === 'approve' ? '✅ APPROVED - please pay the user manually' : '❌ REJECTED'}`,
+          { chat_id: query.message.chat.id, message_id: query.message.message_id }
+        );
+        if (result.telegram_id) {
+          const msgText = action === 'approve'
+            ? `✅ Your withdrawal of ${result.amount} Birr was approved. You will receive payment shortly.`
+            : `❌ Your withdrawal of ${result.amount} Birr was rejected. Your balance has been refunded.`;
+          bot.sendMessage(result.telegram_id, msgText).catch(() => {});
+        }
+      }
+      bot.answerCallbackQuery(query.id, { text: 'Done.' });
+    } catch (err) {
+      console.error(err);
+      bot.answerCallbackQuery(query.id, { text: 'Error: ' + err.message });
+    }
+  });
+}
+
+function notifyAdminDeposit(deposit) {
+  if (!bot || !ADMIN_CHAT_ID) return;
+  const text = `🟢 NEW DEPOSIT REQUEST #${deposit.id}\nUser: ${deposit.telegram_id}\nAmount: ${deposit.amount} Birr\nMethod: ${deposit.method}\nTxn ID: ${deposit.txn_id}`;
+  const opts = {
+    reply_markup: {
+      inline_keyboard: [[
+        { text: '✅ Approve', callback_data: `approve:deposit:${deposit.id}` },
+        { text: '❌ Reject', callback_data: `reject:deposit:${deposit.id}` }
+      ]]
+    }
+  };
+  if (deposit.screenshot_path) {
+    bot.sendPhoto(ADMIN_CHAT_ID, path.join(uploadsDir, path.basename(deposit.screenshot_path)), {
+      caption: text,
+      reply_markup: opts.reply_markup
+    }).catch(() => bot.sendMessage(ADMIN_CHAT_ID, text, opts));
+  } else {
+    bot.sendMessage(ADMIN_CHAT_ID, text, opts);
+  }
+}
+
+function notifyAdminWithdrawal(withdrawal) {
+  if (!bot || !ADMIN_CHAT_ID) return;
+  const text = `🟡 NEW WITHDRAWAL REQUEST #${withdrawal.id}\nUser: ${withdrawal.telegram_id}\nAmount: ${withdrawal.amount} Birr\nAccount Info: ${withdrawal.account_info}`;
+  bot.sendMessage(ADMIN_CHAT_ID, text, {
+    reply_markup: {
+      inline_keyboard: [[
+        { text: '✅ Approve', callback_data: `approve:withdraw:${withdrawal.id}` },
+        { text: '❌ Reject', callback_data: `reject:withdraw:${withdrawal.id}` }
+      ]]
+    }
+  });
+}
+
+// ---------- Business logic ----------
+function approveDeposit(id) {
+  const deposit = db.prepare('SELECT * FROM deposits WHERE id = ?').get(id);
+  if (!deposit) throw new Error('Deposit not found');
+  if (deposit.status !== 'pending') throw new Error('Already resolved');
+
+  getOrCreateUser(deposit.telegram_id);
+  db.prepare('UPDATE users SET balance_real = balance_real + ? WHERE telegram_id = ?')
+    .run(deposit.amount, deposit.telegram_id);
+  db.prepare("UPDATE deposits SET status = 'approved', resolved_at = datetime('now') WHERE id = ?").run(id);
+
+  const user = db.prepare('SELECT * FROM users WHERE telegram_id = ?').get(deposit.telegram_id);
+  return { telegram_id: deposit.telegram_id, amount: deposit.amount, balance_real: user.balance_real };
+}
+
+function rejectDeposit(id) {
+  const deposit = db.prepare('SELECT * FROM deposits WHERE id = ?').get(id);
+  if (!deposit) throw new Error('Deposit not found');
+  if (deposit.status !== 'pending') throw new Error('Already resolved');
+  db.prepare("UPDATE deposits SET status = 'rejected', resolved_at = datetime('now') WHERE id = ?").run(id);
+  return { telegram_id: deposit.telegram_id, amount: deposit.amount };
+}
+
+function approveWithdrawal(id) {
+  const w = db.prepare('SELECT * FROM withdrawals WHERE id = ?').get(id);
+  if (!w) throw new Error('Withdrawal not found');
+  if (w.status !== 'pending') throw new Error('Already resolved');
+  // funds were already deducted (held) when the request was created
+  db.prepare("UPDATE withdrawals SET status = 'approved', resolved_at = datetime('now') WHERE id = ?").run(id);
+  return { telegram_id: w.telegram_id, amount: w.amount };
+}
+
+function rejectWithdrawal(id) {
+  const w = db.prepare('SELECT * FROM withdrawals WHERE id = ?').get(id);
+  if (!w) throw new Error('Withdrawal not found');
+  if (w.status !== 'pending') throw new Error('Already resolved');
+  // refund the held amount back to the user's withdrawable balance
+  db.prepare('UPDATE users SET balance_real = balance_real + ? WHERE telegram_id = ?').run(w.amount, w.telegram_id);
+  db.prepare("UPDATE withdrawals SET status = 'rejected', resolved_at = datetime('now') WHERE id = ?").run(id);
+  return { telegram_id: w.telegram_id, amount: w.amount };
+}
+
+// ---------- API: Wallet ----------
+app.get('/api/wallet/:telegram_id', (req, res) => {
+  const user = getOrCreateUser(req.params.telegram_id, req.query.username);
   res.json({
-    ...state,
-    drawnNumbers: drawn,
-    userCards,
-    balance: wallet ? wallet.balance : 0
+    telegram_id: user.telegram_id,
+    balance_real: user.balance_real,
+    balance_bonus: user.balance_bonus,
+    total_balance: user.balance_real + user.balance_bonus
   });
 });
 
-// ---------- Deposit & Withdrawal requests ----------
-app.post('/deposit', upload.single('screenshot'), (req, res) => {
-  const { userId, amount } = req.body;
-  if (!userId || !amount || !req.file) return res.status(400).json({ error: 'Missing fields' });
-  const amt = parseFloat(amount);
-  if (isNaN(amt) || amt <= 0) return res.status(400).json({ error: 'Invalid amount' });
+// ---------- API: Deposits ----------
+app.post('/api/deposit', upload.single('screenshot'), (req, res) => {
+  const { telegram_id, amount, method, txn_id, username } = req.body;
+  const amt = parseInt(amount, 10);
 
-  const dbRes = db.prepare(
-    'INSERT INTO deposit_requests (user_id, amount, screenshot_path) VALUES (?, ?, ?)'
-  ).run(userId, amt, req.file.path);
+  if (!telegram_id || !amt || !method || !txn_id) {
+    return res.status(400).json({ error: 'Missing required fields.' });
+  }
+  if (amt < MIN_DEPOSIT) {
+    return res.status(400).json({ error: `Minimum deposit is ${MIN_DEPOSIT} Birr.` });
+  }
+  if (!req.file) {
+    return res.status(400).json({ error: 'Please attach the SMS confirmation screenshot.' });
+  }
 
-  res.json({ success: true, requestId: dbRes.lastInsertRowid });
+  getOrCreateUser(telegram_id, username);
+  const screenshot_path = `/uploads/${req.file.filename}`;
+
+  const info = db.prepare(
+    'INSERT INTO deposits (telegram_id, amount, method, txn_id, screenshot_path) VALUES (?, ?, ?, ?, ?)'
+  ).run(telegram_id, amt, method, txn_id, screenshot_path);
+
+  const deposit = db.prepare('SELECT * FROM deposits WHERE id = ?').get(info.lastInsertRowid);
+  notifyAdminDeposit(deposit);
+
+  res.json({ success: true, deposit_id: deposit.id, status: deposit.status });
 });
 
-app.post('/withdraw', (req, res) => {
-  const { userId, amount, accountDetails } = req.body;
-  if (!userId || !amount || !accountDetails) return res.status(400).json({ error: 'Missing fields' });
-  const amt = parseFloat(amount);
-  if (isNaN(amt) || amt <= 0) return res.status(400).json({ error: 'Invalid amount' });
-
-  const wallet = db.prepare('SELECT balance FROM wallets WHERE user_id = ?').get(userId);
-  if (!wallet || wallet.balance < amt) return res.status(400).json({ error: 'Insufficient balance' });
-
-  db.prepare('INSERT INTO withdrawal_requests (user_id, amount, account_details) VALUES (?, ?, ?)').run(userId, amt, accountDetails);
-  res.json({ success: true });
+app.get('/api/deposits/:telegram_id', (req, res) => {
+  const rows = db.prepare('SELECT * FROM deposits WHERE telegram_id = ? ORDER BY id DESC').all(req.params.telegram_id);
+  res.json(rows);
 });
 
-// ---------- Admin endpoints ----------
-function adminAuth(req, res, next) {
-  const key = req.headers['x-admin-key'];
-  if (key !== ADMIN_KEY) return res.status(403).json({ error: 'Unauthorized' });
+// ---------- API: Withdrawals ----------
+app.post('/api/withdraw', (req, res) => {
+  const { telegram_id, amount, account_info } = req.body;
+  const amt = parseInt(amount, 10);
+
+  if (!telegram_id || !amt || !account_info) {
+    return res.status(400).json({ error: 'Missing required fields.' });
+  }
+  if (amt < MIN_WITHDRAW) {
+    return res.status(400).json({ error: `Minimum withdrawal is ${MIN_WITHDRAW} Birr.` });
+  }
+
+  const user = getOrCreateUser(telegram_id);
+
+  // Only the withdrawable (real) balance counts. Bonus balance can never be withdrawn.
+  if (amt > user.balance_real) {
+    return res.status(400).json({
+      error: 'Insufficient withdrawable balance. Bonus balance cannot be withdrawn.',
+      balance_real: user.balance_real,
+      balance_bonus: user.balance_bonus
+    });
+  }
+
+  // Hold the funds immediately so the user can't double-spend while pending.
+  db.prepare('UPDATE users SET balance_real = balance_real - ? WHERE telegram_id = ?').run(amt, telegram_id);
+
+  const info = db.prepare(
+    'INSERT INTO withdrawals (telegram_id, amount, account_info) VALUES (?, ?, ?)'
+  ).run(telegram_id, amt, account_info);
+
+  const withdrawal = db.prepare('SELECT * FROM withdrawals WHERE id = ?').get(info.lastInsertRowid);
+  notifyAdminWithdrawal(withdrawal);
+
+  res.json({ success: true, withdrawal_id: withdrawal.id, status: withdrawal.status });
+});
+
+app.get('/api/withdrawals/:telegram_id', (req, res) => {
+  const rows = db.prepare('SELECT * FROM withdrawals WHERE telegram_id = ? ORDER BY id DESC').all(req.params.telegram_id);
+  res.json(rows);
+});
+
+// ---------- Admin dashboard (simple, key-protected) ----------
+function requireAdminKey(req, res, next) {
+  const key = req.query.key || req.headers['x-admin-key'];
+  if (key !== ADMIN_DASHBOARD_KEY) return res.status(403).json({ error: 'Forbidden' });
   next();
 }
 
-app.get('/admin/deposits', adminAuth, (req, res) => {
-  const rows = db.prepare(`
-    SELECT d.*, u.username, u.telegram_id FROM deposit_requests d
-    JOIN users u ON d.user_id = u.id ORDER BY d.created_at DESC
-  `).all();
-  res.json(rows);
+app.get('/api/admin/deposits', requireAdminKey, (req, res) => {
+  res.json(db.prepare("SELECT * FROM deposits WHERE status = 'pending' ORDER BY id DESC").all());
 });
 
-app.post('/admin/deposits/:id/approve', adminAuth, (req, res) => {
-  const { id } = req.params;
-  const reqDep = db.prepare('SELECT * FROM deposit_requests WHERE id = ? AND status = "pending"').get(id);
-  if (!reqDep) return res.status(404).json({ error: 'Not found' });
-  db.prepare('UPDATE deposit_requests SET status = "approved" WHERE id = ?').run(id);
-  db.prepare('UPDATE wallets SET balance = balance + ? WHERE user_id = ?').run(reqDep.amount, reqDep.user_id);
-  db.prepare("INSERT INTO transactions (user_id, type, amount, detail) VALUES (?, 'deposit', ?, 'TeleBirr/CBE deposit approved')").run(reqDep.user_id, reqDep.amount);
-  res.json({ success: true });
+app.get('/api/admin/withdrawals', requireAdminKey, (req, res) => {
+  res.json(db.prepare("SELECT * FROM withdrawals WHERE status = 'pending' ORDER BY id DESC").all());
 });
 
-app.post('/admin/deposits/:id/reject', adminAuth, (req, res) => {
-  const { id } = req.params;
-  db.prepare('UPDATE deposit_requests SET status = "rejected" WHERE id = ?').run(id);
-  res.json({ success: true });
-});
-
-app.get('/admin/withdrawals', adminAuth, (req, res) => {
-  const rows = db.prepare(`
-    SELECT w.*, u.username, u.telegram_id FROM withdrawal_requests w
-    JOIN users u ON w.user_id = u.id ORDER BY w.created_at DESC
-  `).all();
-  res.json(rows);
-});
-
-app.post('/admin/withdrawals/:id/approve', adminAuth, (req, res) => {
-  const { id } = req.params;
-  const reqW = db.prepare('SELECT * FROM withdrawal_requests WHERE id = ? AND status = "pending"').get(id);
-  if (!reqW) return res.status(404).json({ error: 'Not found' });
-  db.prepare('UPDATE withdrawal_requests SET status = "approved" WHERE id = ?').run(id);
-  db.prepare('UPDATE wallets SET balance = balance - ? WHERE user_id = ? AND balance >= ?').run(reqW.amount, reqW.user_id, reqW.amount);
-  db.prepare("INSERT INTO transactions (user_id, type, amount, detail) VALUES (?, 'withdrawal', ?, 'Withdrawal approved')").run(reqW.user_id, -reqW.amount);
-  res.json({ success: true });
-});
-
-app.post('/admin/withdrawals/:id/reject', adminAuth, (req, res) => {
-  const { id } = req.params;
-  db.prepare('UPDATE withdrawal_requests SET status = "rejected" WHERE id = ?').run(id);
-  res.json({ success: true });
-});
-
-// Start new round
-app.post('/admin/start-round', adminAuth, (req, res) => {
-  let state = getGameState();
-  if (state.status !== 'idle' && state.status !== 'finished') return res.status(400).json({ error: 'Game already running' });
-
-  const newRound = state.current_round + 1;
-  setGameState('current_round', newRound);
-  setGameState('status', 'idle');
-  setGameState('pot', 0);
-  setGameState('sold_cards', 0);
-  setGameState('drawn_index', 0);
-  db.prepare('DELETE FROM drawn_numbers WHERE round_id = ?').run(newRound);
-
-  io.emit('game_update', {
-    round: newRound,
-    pot: 0,
-    soldCards: 0,
-    totalCards: 200,
-    status: 'idle'
-  });
-  res.json({ success: true, round: newRound });
-});
-
-// ==================== Socket.IO Bingo Engine ====================
-let drawInterval = null;
-let currentRound = getGameState().current_round;
-
-function startDrawInterval() {
-  if (drawInterval) clearInterval(drawInterval);
-  drawInterval = setInterval(drawNumber, 5000);
-}
-
-function stopDrawInterval() {
-  if (drawInterval) {
-    clearInterval(drawInterval);
-    drawInterval = null;
-  }
-}
-
-// Called every 5 seconds
-async function drawNumber() {
-  let state = getGameState();
-  if (state.status !== 'active') return;
-
-  const allNumbers = Array.from({ length: 75 }, (_, i) => i + 1);
-  const drawn = db.prepare('SELECT number FROM drawn_numbers WHERE round_id = ?').all(state.current_round).map(r => r.number);
-  const remaining = allNumbers.filter(n => !drawn.includes(n));
-  if (remaining.length === 0) {
-    // All numbers drawn, no winner -> game finishes
-    setGameState('status', 'finished');
-    stopDrawInterval();
-    io.emit('game_over', { message: 'Game over – no winner. Jackpot stays for next round.' });
-    return;
-  }
-
-  const nextNumber = remaining[Math.floor(Math.random() * remaining.length)];
-  db.prepare('INSERT INTO drawn_numbers (round_id, number) VALUES (?, ?)').run(state.current_round, nextNumber);
-
-  // Amharic voice caller
-  const amharicText = `ቁጥር ${numberToAmharicWords(nextNumber)}`;
-  let audioUrl = '';
+app.post('/api/admin/deposit/:id/approve', requireAdminKey, (req, res) => {
   try {
-    audioUrl = getAudioUrl(amharicText, { lang: 'am', slow: false });
-  } catch (e) {
-    console.error('TTS error:', e);
-  }
+    const result = approveDeposit(req.params.id);
+    if (bot) bot.sendMessage(result.telegram_id, `✅ Your deposit of ${result.amount} Birr has been approved. New balance: ${result.balance_real} Birr.`).catch(() => {});
+    res.json({ success: true, result });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
 
-  io.emit('new_number', { number: nextNumber, amharicText, audioUrl });
+app.post('/api/admin/deposit/:id/reject', requireAdminKey, (req, res) => {
+  try {
+    const result = rejectDeposit(req.params.id);
+    if (bot) bot.sendMessage(result.telegram_id, `❌ Your deposit of ${result.amount} Birr was rejected.`).catch(() => {});
+    res.json({ success: true, result });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
 
-  // Check for winners
-  const cards = db.prepare('SELECT * FROM game_cards WHERE round_id = ?').all(state.current_round);
-  let winnerCard = null;
-  for (const card of cards) {
-    if (checkBingo(card, nextNumber)) {
-      winnerCard = card;
-      break;
-    }
-  }
+app.post('/api/admin/withdraw/:id/approve', requireAdminKey, (req, res) => {
+  try {
+    const result = approveWithdrawal(req.params.id);
+    if (bot) bot.sendMessage(result.telegram_id, `✅ Your withdrawal of ${result.amount} Birr was approved.`).catch(() => {});
+    res.json({ success: true, result });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
 
-  if (winnerCard) {
-    state = getGameState();
-    setGameState('status', 'finished');
-    stopDrawInterval();
+app.post('/api/admin/withdraw/:id/reject', requireAdminKey, (req, res) => {
+  try {
+    const result = rejectWithdrawal(req.params.id);
+    if (bot) bot.sendMessage(result.telegram_id, `❌ Your withdrawal of ${result.amount} Birr was rejected and refunded.`).catch(() => {});
+    res.json({ success: true, result });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
 
-    // Credit prize pool to winner
-    const prize = state.pot;
-    db.prepare('UPDATE wallets SET balance = balance + ? WHERE user_id = ?').run(prize, winnerCard.user_id);
-    db.prepare("INSERT INTO transactions (user_id, type, amount, detail) VALUES (?, 'win', ?, 'Bingo winner')").run(winnerCard.user_id, prize);
-    db.prepare('UPDATE game_cards SET is_winner = 1 WHERE id = ?').run(winnerCard.id);
-
-    const winnerUser = db.prepare('SELECT username, telegram_id FROM users WHERE id = ?').get(winnerCard.user_id);
-    io.emit('game_winner', {
-      winner: winnerUser,
-      prize,
-      cardId: winnerCard.id,
-      message: `🎉 ${winnerUser.username} won ${prize} Birr!`
-    });
-  }
-}
-
-// Check if a card has Bingo after marking a new number
-function checkBingo(card, newNumber) {
-  const numbers = JSON.parse(card.numbers);
-  const marked = new Set(JSON.parse(card.marked).map(Number));
-  // Find index of new number (if present)
-  const idx = numbers.indexOf(newNumber);
-  if (idx !== -1) marked.add(idx);
-  // Save updated marked set
-  db.prepare('UPDATE game_cards SET marked = ? WHERE id = ?').run(JSON.stringify(Array.from(marked)), card.id);
-
-  // Build a 5x5 grid (0-24)
-  const grid = Array.from({ length: 5 }, (_, r) => Array.from({ length: 5 }, (_, c) => r * 5 + c));
-  // Check rows
-  for (let r = 0; r < 5; r++) {
-    if (grid[r].every(i => marked.has(i) || numbers[i] === 0)) return true;
-  }
-  // Check columns
-  for (let c = 0; c < 5; c++) {
-    if ([0,1,2,3,4].every(r => marked.has(r*5+c) || numbers[r*5+c] === 0)) return true;
-  }
-  // Diagonals
-  if ([0,6,12,18,24].every(i => marked.has(i) || numbers[i] === 0)) return true;
-  if ([4,8,12,16,20].every(i => marked.has(i) || numbers[i] === 0)) return true;
-
-  return false;
-}
-
-// Convert 1-75 to Amharic words (simplified)
-function numberToAmharicWords(num) {
-  const ones = ['', 'አንድ', 'ሁለት', 'ሦስት', 'አራት', 'አምስት', 'ስድስት', 'ሰባት', 'ስምንት', 'ዘጠኝ'];
-  const tens = ['', '', 'ሃያ', 'ሰላሳ', 'አርባ', 'ሃምሳ', 'ስልሳ', 'ሰባ'];
-  if (num <= 9) return ones[num];
-  if (num === 10) return 'አስር';
-  if (num < 20) return 'አስራ ' + ones[num - 10];
-  const ten = Math.floor(num / 10);
-  const one = num % 10;
-  const tenWord = tens[ten];
-  if (one === 0) return tenWord;
-  return tenWord + ' ' + ones[one];
-}
-
-// Admin can start the draw (transition from idle to active)
-app.post('/admin/start-draw', adminAuth, (req, res) => {
-  let state = getGameState();
-  if (state.status !== 'idle') return res.status(400).json({ error: 'Game not in idle state' });
-  setGameState('status', 'active');
-  startDrawInterval();
-  io.emit('game_update', { status: 'active', pot: state.pot, soldCards: state.sold_cards });
+app.post('/api/admin/withdraw/:id/mark-paid', requireAdminKey, (req, res) => {
+  const w = db.prepare('SELECT * FROM withdrawals WHERE id = ?').get(req.params.id);
+  if (!w) return res.status(404).json({ error: 'Not found' });
+  db.prepare("UPDATE withdrawals SET status = 'paid' WHERE id = ?").run(req.params.id);
   res.json({ success: true });
 });
 
-// Handle Socket.IO connections
-io.on('connection', (socket) => {
-  console.log('User connected:', socket.id);
+// ---------- Bingo game / Socket.io (Amharic auto-caller) ----------
+// Amharic number words 1-90 used to build "ቁጥር N" style announcements client-side via TTS.
+// The server just tracks which numbers have been called and broadcasts them; the browser
+// speaks them using the Web Speech API (see public/index.html).
+const gameRooms = {}; // roomId -> { calledNumbers: [], remaining: [1..75], intervalId, takenCartellas: {} }
+const CARTELLA_COUNT = 200;
 
-  socket.on('join', (userId) => {
-    socket.userId = userId;
-    const state = getGameState();
-    const drawn = db.prepare('SELECT number FROM drawn_numbers WHERE round_id = ?').all(state.current_round).map(r => r.number);
-    socket.emit('game_update', {
-      round: state.current_round,
-      pot: state.pot,
-      soldCards: state.sold_cards,
-      totalCards: state.total_cards,
-      status: state.status,
-      drawnNumbers: drawn
-    });
+// Deterministic PRNG so cartella #N always generates the exact same card for every player/session.
+function mulberry32(seed) {
+  return function () {
+    seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function shuffle(arr, rand) {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+// Standard 75-ball card: column B=1-15, I=16-30, N=31-45 (center FREE), G=46-60, O=61-75.
+function generateCartella(id) {
+  const rand = mulberry32((id * 2654435761) % 2147483647);
+  const ranges = [[1, 15], [16, 30], [31, 45], [46, 60], [61, 75]];
+  const cols = ranges.map(([lo, hi]) => {
+    const nums = [];
+    for (let n = lo; n <= hi; n++) nums.push(n);
+    return shuffle(nums, rand).slice(0, 5);
+  });
+  cols[2][2] = 'FREE'; // middle cell of the N column
+  return cols; // [ [B1..B5], [I1..I5], [N1..N5], [G1..G5], [O1..O5] ]
+}
+
+function createRoom(roomId) {
+  gameRooms[roomId] = {
+    calledNumbers: [],
+    remaining: Array.from({ length: 75 }, (_, i) => i + 1),
+    intervalId: null,
+    takenCartellas: {} // cartellaId -> telegram_id
+  };
+  return gameRooms[roomId];
+}
+
+function getPlayerCount(roomId) {
+  const room = io.sockets.adapter.rooms.get(roomId);
+  return room ? room.size : 0;
+}
+
+function startCallingLoop(roomId) {
+  const room = gameRooms[roomId] || createRoom(roomId);
+  if (room.intervalId || room.remaining.length === 0) return; // already running or nothing left to call
+
+  io.to(roomId).emit('callingState', { active: true });
+  room.intervalId = setInterval(() => {
+    if (room.remaining.length === 0) {
+      clearInterval(room.intervalId);
+      room.intervalId = null;
+      io.to(roomId).emit('callingState', { active: false });
+      io.to(roomId).emit('gameOver');
+      return;
+    }
+    const idx = Math.floor(Math.random() * room.remaining.length);
+    const number = room.remaining.splice(idx, 1)[0];
+    room.calledNumbers.push(number);
+    io.to(roomId).emit('numberCalled', { number, calledNumbers: room.calledNumbers });
+  }, 4000); // one number every 4 seconds, adjust to taste
+}
+
+io.on('connection', (socket) => {
+  socket.on('joinRoom', (roomId) => {
+    socket.join(roomId);
+    const room = gameRooms[roomId] || createRoom(roomId);
+    socket.emit('roomState', { calledNumbers: room.calledNumbers, playerCount: getPlayerCount(roomId) });
+    socket.emit('cartellaState', { taken: room.takenCartellas });
+    socket.emit('callingState', { active: !!room.intervalId });
+    io.to(roomId).emit('playerCount', getPlayerCount(roomId));
+
+    // Auto-start the shared caller for the room as soon as there's at least one player.
+    // Calling is a room-wide, server-controlled process — no single player can start/stop it
+    // for everyone else, which keeps the game fair in multiplayer.
+    if (!room.intervalId && room.remaining.length > 0) {
+      startCallingLoop(roomId);
+    }
   });
 
-  socket.on('disconnect', () => {
-    console.log('User disconnected:', socket.id);
+  socket.on('selectCartella', ({ roomId, cartellaId, telegram_id }) => {
+    const room = gameRooms[roomId] || createRoom(roomId);
+    const id = Number(cartellaId);
+    if (!Number.isInteger(id) || id < 1 || id > CARTELLA_COUNT) {
+      return socket.emit('cartellaError', { message: 'Invalid cartella number.' });
+    }
+    if (room.takenCartellas[id] && room.takenCartellas[id] !== telegram_id) {
+      return socket.emit('cartellaError', { message: 'This cartella is already taken. Pick another.' });
+    }
+    // Release any cartella this user held previously (one active cartella per player per room).
+    Object.keys(room.takenCartellas).forEach((cid) => {
+      if (room.takenCartellas[cid] === telegram_id) delete room.takenCartellas[cid];
+    });
+    room.takenCartellas[id] = telegram_id;
+    socket.emit('cartellaAssigned', { cartellaId: id, card: generateCartella(id) });
+    io.to(roomId).emit('cartellaState', { taken: room.takenCartellas });
+  });
+
+  socket.on('disconnecting', () => {
+    for (const roomId of socket.rooms) {
+      if (roomId !== socket.id) {
+        // subtract 1 since this socket hasn't left yet at 'disconnecting' time
+        io.to(roomId).emit('playerCount', Math.max(0, getPlayerCount(roomId) - 1));
+      }
+    }
+  });
+
+  socket.on('startCalling', (roomId) => {
+    startCallingLoop(roomId);
+  });
+
+  socket.on('stopCalling', (roomId) => {
+    // Reserved for a future admin-only control panel — intentionally not exposed to the
+    // player UI, so no single player can pause the caller for the whole room.
+    if (String(socket.handshake.query.isAdmin) !== 'true') return;
+    const room = gameRooms[roomId];
+    if (room && room.intervalId) {
+      clearInterval(room.intervalId);
+      room.intervalId = null;
+      io.to(roomId).emit('callingState', { active: false });
+    }
+  });
+
+  socket.on('resetRoom', (roomId) => {
+    if (gameRooms[roomId] && gameRooms[roomId].intervalId) {
+      clearInterval(gameRooms[roomId].intervalId);
+    }
+    createRoom(roomId);
+    io.to(roomId).emit('roomState', { calledNumbers: [], playerCount: getPlayerCount(roomId) });
+    io.to(roomId).emit('cartellaState', { taken: {} });
+    io.to(roomId).emit('callingState', { active: false });
+    if (getPlayerCount(roomId) > 0) startCallingLoop(roomId);
   });
 });
 
-// Start server
 server.listen(PORT, () => {
   console.log(`Bingo server running on port ${PORT}`);
-  // If game was previously active, restart draw interval
-  const state = getGameState();
-  if (state.status === 'active') {
-    startDrawInterval();
-  }
 });
