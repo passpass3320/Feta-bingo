@@ -130,46 +130,51 @@
   }
   .bingo-btn:disabled { opacity: 0.4; }
 
-  .my-card-widget {
-    background: var(--card);
-    border-radius: 14px;
-    padding: 10px;
+  /* Multiple cards, side-by-side, horizontally scrollable */
+  .my-cards-section {
     margin-bottom: 14px;
     display: none;
   }
-  .my-card-widget.visible { display: block; }
+  .my-cards-section.visible { display: block; }
+  .my-cards-section .section-label {
+    font-size: 13px; color: var(--muted); margin-bottom: 8px;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .my-cards-grid {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(150px, 168px);
+    gap: 10px;
+    overflow-x: auto;
+    padding-bottom: 6px;
+    scroll-snap-type: x proximity;
+  }
+  .my-card {
+    background: var(--card);
+    border-radius: 14px;
+    padding: 8px;
+    scroll-snap-align: start;
+    border: 1px solid #2c2f57;
+  }
   .my-card-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    font-size: 13px;
+    font-size: 12px;
     color: var(--muted);
-    margin-bottom: 8px;
+    margin-bottom: 6px;
   }
   .my-card-header b { color: var(--accent); }
-  .my-card-grid {
-    display: grid;
-    grid-template-columns: repeat(5, 1fr);
-    gap: 4px;
+  .my-card-header .remove-card {
+    background: none; border: none; color: var(--danger); font-size: 15px; padding: 0 4px; cursor: pointer;
   }
+  .my-card-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 3px; }
   .my-card-grid .hdr {
-    text-align: center;
-    font-weight: 800;
-    border-radius: 6px;
-    padding: 4px 0;
-    color: #fff;
-    font-size: 12px;
+    text-align: center; font-weight: 800; border-radius: 5px; padding: 3px 0; color: #fff; font-size: 10px;
   }
   .my-card-grid .cell {
-    aspect-ratio: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: #262b45;
-    border-radius: 6px;
-    font-size: 13px;
-    font-weight: 700;
-    color: var(--text);
+    aspect-ratio: 1; display: flex; align-items: center; justify-content: center;
+    background: #262b45; border-radius: 5px; font-size: 11px; font-weight: 700; color: var(--text);
   }
   .my-card-grid .cell.free { background: var(--accent); color: #241900; }
   .my-card-grid .cell.daubed { background: var(--accent2); color: #06210f; }
@@ -220,21 +225,35 @@
   .toggle-chip .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }
   .toggle-chip.active .dot { background: var(--accent2); }
 
-  .bingo-board { margin-top: 16px; background: var(--card); border-radius: 16px; padding: 10px; }
-  .bingo-header { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; margin-bottom: 4px; }
-  .bingo-header div { text-align: center; font-weight: 800; border-radius: 6px; padding: 6px 0; color: #fff; }
-  .col-B { background: #f03e3e; }
-  .col-I { background: #f08c00; }
-  .col-N { background: #f1c40f; color:#241900 !important; }
-  .col-G { background: #2f9e44; }
-  .col-O { background: #1c7ed6; }
-
-  .board { display: grid; grid-template-columns: repeat(5, 1fr); grid-template-rows: repeat(15, 1fr); grid-auto-flow: column; gap: 4px; }
-  .board div {
-    aspect-ratio: 1; display: flex; align-items: center; justify-content: center;
-    background: #262b45; border-radius: 6px; font-size: 13px; color: var(--muted); font-weight: 600;
+  /* Game layout: main column + compact scrollable "called numbers" side panel */
+  .game-layout { display: flex; gap: 10px; align-items: flex-start; }
+  .game-main { flex: 1; min-width: 0; }
+  .called-side-panel {
+    flex: 0 0 60px;
+    width: 60px;
+    background: var(--card);
+    border-radius: 14px;
+    padding: 8px 0;
+    max-height: 60vh;
+    overflow-y: auto;
+    position: sticky;
+    top: 76px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
   }
-  .board div.called { background: var(--accent2); color: #06210f; }
+  .called-side-panel .panel-title {
+    font-size: 10px; color: var(--muted); text-align: center; margin-bottom: 2px; text-transform: uppercase; letter-spacing: 1px;
+  }
+  .called-side-panel .ball-mini {
+    width: 40px; height: 40px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 10px; font-weight: 800; color: #fff; flex: 0 0 auto;
+  }
+  .called-side-panel .ball-mini.latest {
+    box-shadow: 0 0 0 3px var(--accent);
+  }
 
   .actions { display: flex; gap: 10px; margin-top: 16px; }
   button { border: none; border-radius: 12px; padding: 12px 16px; font-size: 15px; font-weight: 600; cursor: pointer; }
@@ -374,39 +393,40 @@
     <div class="stat-pill stat-calls">📢 Calls: <span id="statCalls">0</span></div>
   </div>
 
-  <button class="cartella-btn" id="openCartella">🎫 ካርቴላ ምረጥ (Pick Cartella) — <span id="myCartellaLabel">አልተመረጠም</span></button>
+  <button class="cartella-btn" id="openCartella">🎫 ካርቴላ ጨምር (Add Cartella) — <span id="myCartellaLabel">0 ካርድ</span></button>
 
   <div class="winner-window-banner" id="winnerWindowBanner"></div>
 
-  <div class="my-card-widget" id="myCardWidget">
-    <div class="my-card-header">Cartella <b id="myCardId">#--</b></div>
-    <div class="my-card-grid" id="myCardGrid"></div>
-    <button class="bingo-btn" id="claimBingoBtn" disabled>🏆 ቢንጎ! (Claim Bingo)</button>
-    <div class="status-msg" id="bingoStatus"></div>
-  </div>
+  <div class="game-layout">
+    <div class="game-main">
+      <div class="my-cards-section" id="myCardsSection">
+        <div class="section-label">
+          <span>የእርስዎ ካርቴላዎች (Your Cards)</span>
+          <span id="myCardsCount">0</span>
+        </div>
+        <div class="my-cards-grid" id="myCardsGrid"></div>
+        <button class="bingo-btn" id="claimBingoBtn" disabled>🏆 ቢንጎ! (Claim Bingo)</button>
+        <div class="status-msg" id="bingoStatus"></div>
+      </div>
 
-  <div class="caller-box">
-    <div class="current-label">Current Ball</div>
-    <div class="caller-number" id="callerNumber">--</div>
-    <div class="caller-amharic" id="callerAmharic">ጨዋታ ይጀምሩ</div>
+      <div class="caller-box">
+        <div class="current-label">Current Ball</div>
+        <div class="caller-number" id="callerNumber">--</div>
+        <div class="caller-amharic" id="callerAmharic">ካርቴላ ይምረጡ ጨዋታው ይጀምራል</div>
 
-    <div class="last-called-row" id="lastCalledRow"></div>
+        <div class="last-called-row" id="lastCalledRow"></div>
 
-    <div class="toggle-row">
-      <div class="toggle-chip active" id="autoToggle"><span class="dot"></span> Auto: <span id="autoStatusText">ON</span></div>
-      <div class="toggle-chip active" id="soundToggle"><span class="dot"></span> 🔊 Sound</div>
+        <div class="toggle-row">
+          <div class="toggle-chip active" id="autoToggle"><span class="dot"></span> Auto: <span id="autoStatusText">ON</span></div>
+          <div class="toggle-chip active" id="soundToggle"><span class="dot"></span> 🔊 Sound</div>
+        </div>
+      </div>
     </div>
-  </div>
 
-  <div class="bingo-board">
-    <div class="bingo-header">
-      <div class="col-B">B</div>
-      <div class="col-I">I</div>
-      <div class="col-N">N</div>
-      <div class="col-G">G</div>
-      <div class="col-O">O</div>
+    <div class="called-side-panel" id="calledSidePanel">
+      <div class="panel-title">Called</div>
+      <!-- called-number "ball" chips get appended here, most recent on top -->
     </div>
-    <div class="board" id="board"></div>
   </div>
 </main>
 
@@ -552,17 +572,10 @@ function speakNumber(n) {
   window.speechSynthesis.speak(utter);
 }
 
-/* ---------------- Board rendering (classic 1-75 B-I-N-G-O columns) ---------------- */
-const board = document.getElementById('board');
+/* ---------------- Called-numbers side panel (compact, scrollable) ---------------- */
 document.getElementById('statStake').textContent = STAKE;
 document.getElementById('cartellaStakeLabel').textContent = STAKE;
 
-for (let i = 1; i <= 75; i++) {
-  const cell = document.createElement('div');
-  cell.id = 'cell-' + i;
-  cell.textContent = i;
-  board.appendChild(cell);
-}
 function letterFor(n) {
   if (n <= 15) return 'B';
   if (n <= 30) return 'I';
@@ -570,14 +583,17 @@ function letterFor(n) {
   if (n <= 60) return 'G';
   return 'O';
 }
-function markCalled(numbers) {
-  numbers.forEach(n => {
-    const cell = document.getElementById('cell-' + n);
-    if (cell) cell.classList.add('called');
+function renderCalledSidePanel(calledNumbers) {
+  const panel = document.getElementById('calledSidePanel');
+  panel.querySelectorAll('.ball-mini').forEach(el => el.remove());
+  // Most recent call at the top of the scrollable panel.
+  calledNumbers.slice().reverse().forEach((n, idx) => {
+    const letter = letterFor(n);
+    const chip = document.createElement('div');
+    chip.className = `ball-mini ball-${letter}` + (idx === 0 ? ' latest' : '');
+    chip.textContent = `${letter}${n}`;
+    panel.appendChild(chip);
   });
-}
-function clearBoard() {
-  document.querySelectorAll('.board div').forEach(c => c.classList.remove('called'));
 }
 function renderLastCalled(calledNumbers) {
   const row = document.getElementById('lastCalledRow');
@@ -596,8 +612,7 @@ const socket = io();
 socket.emit('joinRoom', ROOM_ID);
 
 socket.on('roomState', (state) => {
-  clearBoard();
-  markCalled(state.calledNumbers || []);
+  renderCalledSidePanel(state.calledNumbers || []);
   renderLastCalled(state.calledNumbers || []);
   document.getElementById('statCalls').textContent = (state.calledNumbers || []).length;
   if (typeof state.playerCount === 'number') document.getElementById('statPlayers').textContent = state.playerCount;
@@ -606,18 +621,18 @@ socket.on('roomState', (state) => {
     document.getElementById('statStake').textContent = STAKE;
     document.getElementById('cartellaStakeLabel').textContent = STAKE;
   }
-  daubMyCard(state.calledNumbers || []);
+  daubMyCards(state.calledNumbers || []);
 });
 
 socket.on('numberCalled', (data) => {
   const letter = letterFor(data.number);
   document.getElementById('callerNumber').textContent = `${letter}${data.number}`;
-  markCalled([data.number]);
+  renderCalledSidePanel(data.calledNumbers);
   renderLastCalled(data.calledNumbers);
   document.getElementById('statCalls').textContent = data.calledNumbers.length;
   if (soundOn) speakNumber(data.number);
   else document.getElementById('callerAmharic').textContent = `ቁጥር ${AMHARIC_NUMBERS[data.number] || data.number}`;
-  daubMyCard(data.calledNumbers);
+  daubMyCards(data.calledNumbers);
   updateBingoButtonState();
 });
 
@@ -676,12 +691,12 @@ socket.on('roundResult', (data) => {
 document.getElementById('closeRoundResult').onclick = () => document.getElementById('roundResultOverlay').classList.remove('open');
 
 function resetLocalRoundState() {
-  myCartellaId = null;
-  myCard = null;
-  document.getElementById('myCartellaLabel').textContent = 'አልተመረጠም';
-  document.getElementById('myCardWidget').classList.remove('visible');
+  myCartellas = [];
+  document.getElementById('myCartellaLabel').textContent = '0 ካርድ';
+  document.getElementById('myCardsSection').classList.remove('visible');
+  document.getElementById('myCardsGrid').innerHTML = '';
   document.getElementById('callerNumber').textContent = '--';
-  document.getElementById('callerAmharic').textContent = 'ጨዋታ ይጀምሩ';
+  document.getElementById('callerAmharic').textContent = 'ካርቴላ ይምረጡ ጨዋታው ይጀምራል';
 }
 
 /* ---------------- Sound toggle (Auto is server-controlled / read-only, see callingState) ---------------- */
@@ -692,12 +707,12 @@ document.getElementById('soundToggle').onclick = () => {
   if (!soundOn && window.speechSynthesis) window.speechSynthesis.cancel();
 };
 
-/* ---------------- Cartella (200 tickets, bots fill empty seats) ---------------- */
-let myCartellaId = null;
-let myCard = null;
+/* ---------------- Cartella (200 tickets, multiple cards per player, bots fill empty seats) ---------------- */
+let myCartellas = []; // [{ id, card }, ...] - a player may hold several cards at once
 let takenCartellas = {};
 let botCartellas = new Set();
 let pendingSelection = null;
+let currentCalledNumbers = [];
 
 const cartellaGrid = document.getElementById('cartellaGrid');
 for (let i = 1; i <= 200; i++) {
@@ -715,12 +730,13 @@ for (let i = 1; i <= 200; i++) {
 }
 
 function renderCartellaGrid() {
+  const myIds = new Set(myCartellas.map(c => c.id));
   document.querySelectorAll('.cartella-grid button').forEach(btn => {
     const id = Number(btn.dataset.id);
-    const ownedByOther = takenCartellas[id] && takenCartellas[id] !== TELEGRAM_ID;
+    const ownedByOther = takenCartellas[id] && !myIds.has(id);
     btn.classList.toggle('bot', botCartellas.has(id));
     btn.classList.toggle('taken', !!ownedByOther && !botCartellas.has(id));
-    btn.classList.toggle('selected', id === myCartellaId);
+    btn.classList.toggle('selected', myIds.has(id));
   });
 }
 
@@ -750,57 +766,94 @@ socket.on('cartellaError', (err) => {
 });
 
 socket.on('cartellaAssigned', (data) => {
-  myCartellaId = data.cartellaId;
-  myCard = data.card;
+  myCartellas.push({ id: data.cartellaId, card: data.card });
   document.getElementById('cartellaStatus').textContent = '';
   document.getElementById('cartellaOverlay').classList.remove('open');
-  document.getElementById('myCartellaLabel').textContent = `#${myCartellaId}`;
+  pendingSelection = null;
+  document.getElementById('confirmCartella').disabled = true;
+  document.getElementById('myCartellaLabel').textContent = `${myCartellas.length} ካርድ`;
   hideSpectatorBanner();
-  renderMyCard();
+  renderMyCards();
 });
 
-function renderMyCard() {
-  if (!myCard) return;
-  const widget = document.getElementById('myCardWidget');
-  widget.classList.add('visible');
-  document.getElementById('myCardId').textContent = `#${myCartellaId}`;
+socket.on('cartellaReleased', (data) => {
+  myCartellas = myCartellas.filter(c => c.id !== data.cartellaId);
+  document.getElementById('myCartellaLabel').textContent = `${myCartellas.length} ካርድ`;
+  renderMyCards();
+});
 
-  const grid = document.getElementById('myCardGrid');
-  grid.innerHTML = '';
-  ['B', 'I', 'N', 'G', 'O'].forEach((letter) => {
-    const hdr = document.createElement('div');
-    hdr.className = `hdr col-${letter}`;
-    hdr.textContent = letter;
-    grid.appendChild(hdr);
-  });
-  for (let row = 0; row < 5; row++) {
-    for (let col = 0; col < 5; col++) {
-      const value = myCard[col][row];
-      const cell = document.createElement('div');
-      cell.className = 'cell';
-      cell.textContent = value === 'FREE' ? '★' : value;
-      if (value === 'FREE') cell.classList.add('free', 'daubed');
-      cell.dataset.value = value;
-      grid.appendChild(cell);
-    }
+function removeCard(cartellaId) {
+  socket.emit('deselectCartella', { roomId: ROOM_ID, cartellaId, telegram_id: TELEGRAM_ID });
+}
+
+function renderMyCards() {
+  const section = document.getElementById('myCardsSection');
+  const grid = document.getElementById('myCardsGrid');
+  document.getElementById('myCardsCount').textContent = myCartellas.length;
+
+  if (myCartellas.length === 0) {
+    section.classList.remove('visible');
+    updateBingoButtonState();
+    return;
   }
-  daubMyCard(currentCalledNumbers);
+  section.classList.add('visible');
+  grid.innerHTML = '';
+
+  myCartellas.forEach(({ id, card }) => {
+    const cardEl = document.createElement('div');
+    cardEl.className = 'my-card';
+    cardEl.dataset.cartellaId = id;
+
+    const header = document.createElement('div');
+    header.className = 'my-card-header';
+    header.innerHTML = `<span>Cartella <b>#${id}</b></span>`;
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'remove-card';
+    removeBtn.textContent = '✕';
+    removeBtn.title = 'Remove this card (only before calling starts)';
+    removeBtn.onclick = () => removeCard(id);
+    header.appendChild(removeBtn);
+    cardEl.appendChild(header);
+
+    const cardGrid = document.createElement('div');
+    cardGrid.className = 'my-card-grid';
+    ['B', 'I', 'N', 'G', 'O'].forEach((letter) => {
+      const hdr = document.createElement('div');
+      hdr.className = `hdr col-${letter}`;
+      hdr.textContent = letter;
+      cardGrid.appendChild(hdr);
+    });
+    for (let row = 0; row < 5; row++) {
+      for (let col = 0; col < 5; col++) {
+        const value = card[col][row];
+        const cell = document.createElement('div');
+        cell.className = 'cell';
+        cell.textContent = value === 'FREE' ? '★' : value;
+        if (value === 'FREE') cell.classList.add('free', 'daubed');
+        cell.dataset.value = value;
+        cardGrid.appendChild(cell);
+      }
+    }
+    cardEl.appendChild(cardGrid);
+    grid.appendChild(cardEl);
+  });
+
+  daubMyCards(currentCalledNumbers);
   updateBingoButtonState();
 }
 
-let currentCalledNumbers = [];
-function daubMyCard(calledNumbers) {
+function daubMyCards(calledNumbers) {
   currentCalledNumbers = calledNumbers;
-  if (!myCard) return;
+  if (myCartellas.length === 0) return;
   const called = new Set(calledNumbers);
-  document.querySelectorAll('#myCardGrid .cell').forEach(cell => {
+  document.querySelectorAll('.my-card-grid .cell').forEach(cell => {
     const v = cell.dataset.value;
     if (v !== 'FREE' && called.has(Number(v))) cell.classList.add('daubed');
   });
 }
 
 function updateBingoButtonState() {
-  document.getElementById('claimBingoBtn').disabled = !myCard;
+  document.getElementById('claimBingoBtn').disabled = myCartellas.length === 0;
 }
 
 document.getElementById('claimBingoBtn').onclick = () => {
@@ -833,7 +886,7 @@ async function refreshWallet() {
     `<b>${data.balance_real} ብር</b><small>ቦነስ: ${data.balance_bonus} ብር</small>`;
   document.getElementById('wdRealBalance').textContent = data.balance_real + ' ብር';
   document.getElementById('wdBonusBalance').textContent = data.balance_bonus + ' ብር';
-  if (data.total_balance < STAKE && !myCard) showSpectatorBanner(); else hideSpectatorBanner();
+  if (data.total_balance < STAKE && myCartellas.length === 0) showSpectatorBanner(); else hideSpectatorBanner();
   return data;
 }
 
