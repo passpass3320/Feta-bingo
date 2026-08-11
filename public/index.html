@@ -1,377 +1,933 @@
 <!DOCTYPE html>
 <html lang="am">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>ቢንጎ - Bingo</title>
-  <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <script src="/socket.io/socket.io.js"></script>
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      background: #1e1e1e; color: #e0e0e0;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      padding: 10px; max-width: 480px; margin: auto;
-    }
-    .card { background: #2a2a2a; border-radius: 12px; padding: 15px; margin: 10px 0; }
-    .balance { font-size: 1.4em; font-weight: bold; }
-    .btn {
-      background: #4CAF50; border: none; color: white; padding: 12px 24px;
-      border-radius: 8px; font-size: 1em; cursor: pointer; margin: 5px 0; width: 100%;
-    }
-    .btn:disabled { background: #555; }
-    .bingo-grid {
-      display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px;
-      text-align: center; margin-top: 10px;
-    }
-    .bingo-cell {
-      background: #333; padding: 8px 0; border-radius: 6px;
-      font-size: 0.9em; font-weight: bold;
-    }
-    .bingo-cell.marked { background: #4CAF50; color: white; }
-    .bingo-cell.free { background: #ffc107; color: black; }
-    .number-history { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 10px; }
-    .number-ball {
-      background: #555; width: 36px; height: 36px; border-radius: 50%;
-      display: flex; align-items: center; justify-content: center; font-weight: bold;
-    }
-    .tab-bar { display: flex; gap: 10px; margin-bottom: 15px; }
-    .tab { flex: 1; text-align: center; padding: 10px; background: #333; border-radius: 8px; cursor: pointer; }
-    .tab.active { background: #4CAF50; }
-    input, select, textarea {
-      width: 100%; padding: 12px; margin: 5px 0 10px; border-radius: 8px;
-      border: none; background: #333; color: white; font-size: 1em;
-    }
-    .winner-banner {
-      background: gold; color: black; padding: 12px; border-radius: 10px; text-align: center; font-size: 1.3em; margin: 10px 0;
-    }
-  </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>ዘመን ቢንጎ - Zemen Bingo</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="/socket.io/socket.io.js"></script>
+<style>
+  :root {
+    --bg: #0f1220;
+    --card: #1b1f34;
+    --accent: #ffb020;
+    --accent2: #22c55e;
+    --danger: #ef4444;
+    --text: #f1f1f6;
+    --muted: #9aa0b4;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding-bottom: 90px;
+  }
+  header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 14px 16px;
+    background: var(--card);
+    position: sticky;
+    top: 0;
+    z-index: 5;
+  }
+  header h1 { font-size: 18px; margin: 0; }
+  .wallet-pill {
+    background: #262b45;
+    border-radius: 20px;
+    padding: 8px 14px;
+    font-size: 13px;
+    text-align: right;
+    line-height: 1.3;
+  }
+  .wallet-pill b { color: var(--accent); font-size: 15px; }
+  .wallet-pill small { color: var(--muted); display: block; }
+
+  main { padding: 16px; }
+
+  /* Stats bar (Players / Prize / Stake / Calls) */
+  .stats-bar {
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    margin-bottom: 14px;
+    padding-bottom: 2px;
+  }
+  .stat-pill {
+    flex: 0 0 auto;
+    padding: 8px 14px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 700;
+    white-space: nowrap;
+    color: #fff;
+  }
+  .stat-players { background: linear-gradient(135deg,#4c6ef5,#3b5bdb); }
+  .stat-prize   { background: linear-gradient(135deg,#2f9e44,#237032); }
+  .stat-stake   { background: linear-gradient(135deg,#f08c00,#d9720a); }
+  .stat-calls   { background: linear-gradient(135deg,#e64980,#c2255c); }
+
+  .caller-box {
+    background: linear-gradient(160deg,#3b2f66,#241c40);
+    border-radius: 16px;
+    padding: 18px;
+    text-align: center;
+    margin-bottom: 16px;
+  }
+  .caller-box .current-label { color: var(--muted); font-size: 13px; margin-bottom: 6px; }
+  .caller-number {
+    width: 92px;
+    height: 92px;
+    line-height: 92px;
+    border-radius: 50%;
+    margin: 0 auto;
+    font-size: 34px;
+    font-weight: 800;
+    background: radial-gradient(circle at 35% 30%, #ffd166, var(--accent));
+    color: #241900;
+    border: 4px solid #fff3;
+  }
+  .caller-amharic { font-size: 18px; color: var(--muted); margin-top: 10px; }
+
+  .last-called-row {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+    margin: 14px 0;
+  }
+  .ball {
+    width: 46px;
+    height: 46px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 14px;
+    color: #fff;
+  }
+  .ball-B { background: #f03e3e; }
+  .ball-I { background: #f08c00; }
+  .ball-N { background: #f1c40f; color: #241900; }
+  .ball-G { background: #2f9e44; }
+  .ball-O { background: #1c7ed6; }
+
+  .toggle-row {
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+  }
+  .toggle-chip {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: #12152a;
+    padding: 8px 14px;
+    border-radius: 20px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    user-select: none;
+    border: 1px solid #333856;
+  }
+  .toggle-chip.active { background: #16532a; border-color: #2f9e44; }
+  #autoToggle { cursor: default; }
+  .toggle-chip .dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: var(--muted);
+  }
+  .toggle-chip.active .dot { background: var(--accent2); }
+
+  .bingo-board {
+    margin-top: 16px;
+    background: var(--card);
+    border-radius: 16px;
+    padding: 10px;
+  }
+  .bingo-header {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 4px;
+    margin-bottom: 4px;
+  }
+  .bingo-header div {
+    text-align: center;
+    font-weight: 800;
+    border-radius: 6px;
+    padding: 6px 0;
+    color: #fff;
+  }
+  .col-B { background: #f03e3e; }
+  .col-I { background: #f08c00; }
+  .col-N { background: #f1c40f; color:#241900 !important; }
+  .col-G { background: #2f9e44; }
+  .col-O { background: #1c7ed6; }
+
+  .board {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    grid-template-rows: repeat(15, 1fr);
+    grid-auto-flow: column;
+    gap: 4px;
+  }
+  .board div {
+    aspect-ratio: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #262b45;
+    border-radius: 6px;
+    font-size: 13px;
+    color: var(--muted);
+    font-weight: 600;
+  }
+  .board div.called {
+    background: var(--accent2);
+    color: #06210f;
+  }
+
+  .actions { display: flex; gap: 10px; margin-top: 16px; }
+  button {
+    border: none;
+    border-radius: 12px;
+    padding: 12px 16px;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .btn-primary { background: var(--accent); color: #241900; flex: 1; }
+  .btn-outline { background: transparent; border: 1px solid var(--muted); color: var(--text); flex: 1; }
+  .btn-danger { background: var(--danger); color: #fff; }
+
+  .bottom-nav {
+    position: fixed;
+    bottom: 0; left: 0; right: 0;
+    display: flex;
+    background: var(--card);
+    padding: 10px 16px;
+    gap: 10px;
+    border-top: 1px solid #2a2f4a;
+  }
+  .bottom-nav button { flex: 1; }
+
+  /* Modal */
+  .modal-overlay {
+    display: none;
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.6);
+    z-index: 20;
+    align-items: flex-end;
+    justify-content: center;
+  }
+  .modal-overlay.open { display: flex; }
+  .modal {
+    background: var(--card);
+    width: 100%;
+    max-width: 480px;
+    border-radius: 20px 20px 0 0;
+    padding: 20px;
+    max-height: 88vh;
+    overflow-y: auto;
+  }
+  .modal h2 { margin-top: 0; }
+  .modal label {
+    display: block;
+    font-size: 13px;
+    color: var(--muted);
+    margin: 12px 0 6px;
+  }
+  .modal input, .modal select {
+    width: 100%;
+    padding: 12px;
+    border-radius: 10px;
+    border: 1px solid #333856;
+    background: #12152a;
+    color: var(--text);
+    font-size: 15px;
+  }
+  .method-card {
+    background: #12152a;
+    border: 1px solid #333856;
+    border-radius: 12px;
+    padding: 12px;
+    margin-top: 10px;
+  }
+  .method-card b { color: var(--accent); }
+  .method-card .num {
+    font-size: 17px;
+    letter-spacing: 1px;
+    margin-top: 4px;
+  }
+  .copy-btn {
+    background: #2a2f4a;
+    color: var(--text);
+    padding: 4px 10px;
+    border-radius: 8px;
+    font-size: 12px;
+    margin-left: 8px;
+  }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 8px; }
+  .balance-split {
+    display: flex;
+    gap: 10px;
+    margin-top: 10px;
+  }
+  .balance-split div {
+    flex: 1;
+    background: #12152a;
+    border-radius: 10px;
+    padding: 10px;
+    text-align: center;
+  }
+  .balance-split b { display: block; font-size: 16px; }
+  .close-x {
+    position: absolute;
+    top: 16px; right: 20px;
+    background: none;
+    color: var(--muted);
+    font-size: 22px;
+    padding: 0;
+  }
+  .modal { position: relative; }
+  .status-msg { margin-top: 10px; font-size: 13px; }
+  .status-ok { color: var(--accent2); }
+  .status-err { color: var(--danger); }
+
+  .history-item {
+    display: flex;
+    justify-content: space-between;
+    padding: 10px 0;
+    border-bottom: 1px solid #2a2f4a;
+    font-size: 13px;
+  }
+  .tag { padding: 2px 8px; border-radius: 8px; font-size: 11px; }
+  .tag-pending { background: #4a3a10; color: #ffb020; }
+  .tag-approved, .tag-paid { background: #103a1c; color: #22c55e; }
+  .tag-rejected { background: #3a1010; color: #ef4444; }
+
+  /* Cartella picker */
+  .cartella-btn {
+    background: linear-gradient(135deg,#f08c00,#d9720a);
+    color: #fff;
+  }
+  .cartella-grid {
+    display: grid;
+    grid-template-columns: repeat(8, 1fr);
+    gap: 6px;
+    margin-top: 12px;
+    max-height: 260px;
+    overflow-y: auto;
+  }
+  .cartella-grid button {
+    padding: 8px 0;
+    font-size: 12px;
+    border-radius: 8px;
+    background: #12152a;
+    color: var(--text);
+    border: 1px solid #333856;
+  }
+  .cartella-grid button.taken { opacity: 0.35; background: #2a2f4a; cursor: not-allowed; }
+  .cartella-grid button.selected { background: var(--accent); color: #241900; font-weight: 800; }
+
+  .my-card-widget {
+    background: var(--card);
+    border-radius: 14px;
+    padding: 10px;
+    margin-bottom: 14px;
+    display: none;
+  }
+  .my-card-widget.visible { display: block; }
+  .my-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 13px;
+    color: var(--muted);
+    margin-bottom: 8px;
+  }
+  .my-card-header b { color: var(--accent); }
+  .my-card-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 4px;
+  }
+  .my-card-grid .hdr {
+    text-align: center;
+    font-weight: 800;
+    border-radius: 6px;
+    padding: 4px 0;
+    color: #fff;
+    font-size: 12px;
+  }
+  .my-card-grid .cell {
+    aspect-ratio: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #262b45;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text);
+  }
+  .my-card-grid .cell.free { background: var(--accent); color: #241900; }
+  .my-card-grid .cell.daubed { background: var(--accent2); color: #06210f; }
+
+  /* Loading screen */
+  #loadingScreen {
+    position: fixed;
+    inset: 0;
+    z-index: 999;
+    background: linear-gradient(160deg, #b39ddb, #9575cd);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    transition: opacity 0.4s ease;
+  }
+  #loadingScreen.hidden {
+    opacity: 0;
+    pointer-events: none;
+  }
+  #loadingScreen .logo {
+    font-size: 34px;
+    font-weight: 800;
+    color: #fff;
+    margin-bottom: 18px;
+    letter-spacing: 1px;
+  }
+  #loadingScreen .spinner {
+    width: 34px;
+    height: 34px;
+    border: 4px solid rgba(255,255,255,0.4);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    margin-bottom: 14px;
+  }
+  #loadingScreen .loading-text {
+    color: #fff;
+    font-size: 16px;
+    opacity: 0.9;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
 </head>
 <body>
-  <div id="login-screen">
-    <h2>ቢንጎ</h2>
-    <p>Please open this app inside Telegram</p>
-    <button class="btn" onclick="initTelegram()">Connect Telegram</button>
+
+<div id="loadingScreen">
+  <div class="logo">ዘመን ቢንጎ</div>
+  <div class="spinner"></div>
+  <div class="loading-text">Loading game...</div>
+</div>
+
+<header>
+  <h1>🎱 ዘመን ቢንጎ</h1>
+  <div class="wallet-pill" id="walletPill">
+    <b>0 ብር</b>
+    <small>ቦነስ: 0 ብር</small>
+  </div>
+</header>
+
+<main>
+  <div class="stats-bar">
+    <div class="stat-pill stat-players">👥 Players: <span id="statPlayers">0</span></div>
+    <div class="stat-pill stat-prize">💰 ደራሽ: <span id="statPrize">0</span></div>
+    <div class="stat-pill stat-stake">🎟 መደብ: <span id="statStake">10</span> ብር</div>
+    <div class="stat-pill stat-calls">📢 Calls: <span id="statCalls">0</span></div>
   </div>
 
-  <div id="main-app" style="display:none;">
-    <div class="card" id="balance-card">
-      <span>💰 Balance: <span class="balance" id="balance">0</span> Birr</span>
-    </div>
+  <button class="cartella-btn" style="width:100%;margin-bottom:14px" id="openCartella">🎫 ካርቴላ ምረጥ (Pick Cartella) — <span id="myCartellaLabel">አልተመረጠም</span></button>
 
-    <div class="tab-bar">
-      <div class="tab active" onclick="switchTab('game')">Bingo</div>
-      <div class="tab" onclick="switchTab('wallet')">Wallet</div>
-      <div class="tab" id="admin-tab" style="display:none;" onclick="switchTab('admin')">Admin</div>
-    </div>
+  <div class="my-card-widget" id="myCardWidget">
+    <div class="my-card-header">Cartella <b id="myCardId">#--</b></div>
+    <div class="my-card-grid" id="myCardGrid"></div>
+  </div>
 
-    <!-- GAME TAB -->
-    <div id="tab-game">
-      <div class="card">
-        <h3>Game <span id="round-number"></span></h3>
-        <p>Status: <strong id="game-status">Loading...</strong></p>
-        <p>Pot: <span id="pot">0</span> Birr</p>
-        <p>Cards sold: <span id="sold">0</span> / <span id="total">200</span></p>
-        <button class="btn" id="buy-card-btn" onclick="buyCard()">Buy Card (10 Birr)</button>
-      </div>
-      <div class="card" id="drawn-history-card">
-        <h4>Drawn Numbers</h4>
-        <div class="number-history" id="drawn-numbers"></div>
-      </div>
-      <div id="my-cards"></div>
-      <div id="winner-announcement"></div>
-    </div>
+  <div class="caller-box">
+    <div class="current-label">Current Ball</div>
+    <div class="caller-number" id="callerNumber">--</div>
+    <div class="caller-amharic" id="callerAmharic">ጨዋታ ይጀምሩ</div>
 
-    <!-- WALLET TAB -->
-    <div id="tab-wallet" style="display:none;">
-      <div class="card">
-        <h3>Deposit</h3>
-        <p>Upload Telebirr/CBE screenshot</p>
-        <input type="number" id="deposit-amount" placeholder="Amount (Birr)">
-        <input type="file" id="deposit-screenshot" accept="image/*">
-        <button class="btn" onclick="submitDeposit()">Submit Deposit Request</button>
-      </div>
-      <div class="card">
-        <h3>Withdraw</h3>
-        <input type="number" id="withdraw-amount" placeholder="Amount (Birr)">
-        <textarea id="withdraw-details" placeholder="Account name/number"></textarea>
-        <button class="btn" onclick="submitWithdrawal()">Request Withdrawal</button>
-      </div>
-    </div>
+    <div class="last-called-row" id="lastCalledRow"></div>
 
-    <!-- ADMIN TAB -->
-    <div id="tab-admin" style="display:none;">
-      <div class="card">
-        <h3>Admin Panel</h3>
-        <input type="password" id="admin-key" placeholder="Admin Key" value="super-secret-admin-key">
-        <button class="btn" onclick="startNewRound()">Start New Round</button>
-        <button class="btn" onclick="startDraw()">Start Drawing</button>
-        <hr>
-        <h4>Deposit Requests</h4>
-        <button class="btn" onclick="loadDeposits()">Refresh</button>
-        <div id="admin-deposits"></div>
-        <h4>Withdrawal Requests</h4>
-        <button class="btn" onclick="loadWithdrawals()">Refresh</button>
-        <div id="admin-withdrawals"></div>
-      </div>
+    <div class="toggle-row">
+      <div class="toggle-chip active" id="autoToggle"><span class="dot"></span> Auto: <span id="autoStatusText">ON</span></div>
+      <div class="toggle-chip active" id="soundToggle"><span class="dot"></span> 🔊 Sound</div>
     </div>
   </div>
 
-  <script>
-    const API = ''; // same origin
-    let socket;
-    let currentUser = null;
-    let adminMode = false;
+  <div class="bingo-board">
+    <div class="bingo-header">
+      <div class="col-B">B</div>
+      <div class="col-I">I</div>
+      <div class="col-N">N</div>
+      <div class="col-G">G</div>
+      <div class="col-O">O</div>
+    </div>
+    <div class="board" id="board"></div>
+  </div>
+</main>
 
-    // ---------- Telegram Init ----------
-    window.Telegram.WebApp.ready();
-    const tg = window.Telegram.WebApp;
+<div class="bottom-nav">
+  <button class="btn-primary" id="openDeposit">💰 ገንዘብ ማስገባት</button>
+  <button class="btn-danger" id="openWithdraw">🏧 ገንዘብ ማውጣት</button>
+</div>
 
-    function initTelegram() {
-      if (!tg.initData || !tg.initData.length) {
-        alert('Please open this mini app from Telegram!');
-        return;
-      }
-      fetch('/auth', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ initData: tg.initData })
-      })
-      .then(r => r.json())
-      .then(data => {
-        if (data.error) { alert(data.error); return; }
-        currentUser = data;
-        document.getElementById('login-screen').style.display = 'none';
-        document.getElementById('main-app').style.display = 'block';
-        document.getElementById('balance').innerText = data.balance;
-        connectSocket();
-        loadGameState();
-        // Admin check – very basic: if telegramId is admin's (change in production)
-        if (data.telegramId === 'YOUR_ADMIN_TELEGRAM_ID') {
-          document.getElementById('admin-tab').style.display = 'block';
-          adminMode = true;
-        }
-      });
-    }
+<!-- Deposit Modal -->
+<div class="modal-overlay" id="depositOverlay">
+  <div class="modal">
+    <button class="close-x" data-close="depositOverlay">✕</button>
+    <h2>ገንዘብ ማስገባት / Deposit</h2>
+    <p class="hint">ዝቅተኛ የተቀማጭ መጠን: <b>50 ብር</b> (Minimum deposit: 50 Birr)</p>
 
-    // ---------- Socket.io ----------
-    function connectSocket() {
-      socket = io();
-      socket.emit('join', currentUser.userId);
-      socket.on('game_update', (data) => {
-        updateGameUI(data);
-      });
-      socket.on('new_number', (data) => {
-        addDrawnNumber(data.number);
-        playAmharicCall(data.audioUrl);
-      });
-      socket.on('game_winner', (data) => {
-        document.getElementById('winner-announcement').innerHTML =
-          `<div class="winner-banner">${data.message}</div>`;
-        loadGameState();
-      });
-      socket.on('game_over', (data) => {
-        document.getElementById('winner-announcement').innerHTML =
-          `<div class="winner-banner">${data.message}</div>`;
-      });
-    }
+    <div class="method-card">
+      <b>Telebirr Agent</b>
+      <div class="num">0971952984 <button class="copy-btn" data-copy="0971952984">Copy</button></div>
+    </div>
+    <div class="method-card">
+      <b>CBE Birr</b>
+      <div class="num">0971952984 <button class="copy-btn" data-copy="0971952984">Copy</button></div>
+    </div>
+    <div class="method-card">
+      <b>Commercial Bank of Ethiopia (CBE Account)</b>
+      <div class="num">0971952984 <button class="copy-btn" data-copy="0971952984">Copy</button></div>
+    </div>
 
-    function playAmharicCall(url) {
-      if (!url) return;
-      const audio = new Audio(url);
-      audio.play().catch(e => console.log('Audio play failed:', e));
-    }
+    <label>የተላከው መጠን (Amount sent, Birr)</label>
+    <input type="number" id="depAmount" min="50" placeholder="e.g. 100">
 
-    // ---------- UI Updates ----------
-    function updateGameUI(data) {
-      document.getElementById('round-number').innerText = data.round || '';
-      document.getElementById('game-status').innerText = data.status;
-      document.getElementById('pot').innerText = data.pot || 0;
-      document.getElementById('sold').innerText = data.soldCards || 0;
-      document.getElementById('total').innerText = data.totalCards || 200;
-      document.getElementById('buy-card-btn').disabled = (data.status !== 'idle');
-      if (data.drawnNumbers) {
-        data.drawnNumbers.forEach(n => addDrawnNumber(n));
-      }
-    }
+    <label>የተጠቀሙበት መንገድ (Method)</label>
+    <select id="depMethod">
+      <option value="Telebirr">Telebirr</option>
+      <option value="CBE Birr">CBE Birr</option>
+      <option value="CBE Account">CBE Account</option>
+    </select>
 
-    function addDrawnNumber(num) {
-      const container = document.getElementById('drawn-numbers');
-      if (!container.querySelector(`.number-ball[data-num="${num}"]`)) {
-        const ball = document.createElement('div');
-        ball.className = 'number-ball';
-        ball.dataset.num = num;
-        ball.innerText = num;
-        container.prepend(ball);
-      }
-    }
+    <label>የግብይት መለያ (Transaction ID)</label>
+    <input type="text" id="depTxn" placeholder="e.g. TX1234567">
 
-    async function loadGameState() {
-      const res = await fetch(`/game-state?userId=${currentUser.userId}`);
-      const state = await res.json();
-      updateGameUI(state);
-      document.getElementById('balance').innerText = state.balance || 0;
-      renderMyCards(state.userCards, state.drawnNumbers);
-    }
+    <label>የኤስኤምኤስ ማረጋገጫ ፎቶ (SMS confirmation screenshot)</label>
+    <input type="file" id="depScreenshot" accept="image/*" required>
+    <p class="hint">ከቴሌብር/ሲቢኢ የደረሰዎትን የክፍያ ማረጋገጫ ኤስኤምኤስ screenshot አድርገው እዚህ ይላኩ።</p>
 
-    function renderMyCards(cards, drawnNumbers) {
-      const container = document.getElementById('my-cards');
-      if (!cards || cards.length === 0) {
-        container.innerHTML = '<p>You have no cards yet.</p>';
-        return;
-      }
-      container.innerHTML = cards.map(card => {
-        const numbers = JSON.parse(card.numbers);
-        const marked = new Set(JSON.parse(card.marked).map(Number));
-        const drawnSet = new Set(drawnNumbers);
-        // Auto-mark for display
-        numbers.forEach((n, i) => {
-          if (n !== 0 && drawnSet.has(n)) marked.add(i);
-        });
-        const cells = numbers.map((n, i) => {
-          let cls = 'bingo-cell';
-          if (n === 0) cls += ' free';
-          else if (marked.has(i)) cls += ' marked';
-          return `<div class="${cls}">${n === 0 ? 'FREE' : n}</div>`;
-        }).join('');
-        return `<div class="card"><h4>Your Card #${card.id}</h4><div class="bingo-grid">${cells}</div></div>`;
-      }).join('');
-    }
+    <button class="btn-primary" style="width:100%;margin-top:16px" id="submitDeposit">አስገባ (Submit)</button>
+    <div class="status-msg" id="depositStatus"></div>
+  </div>
+</div>
 
-    // ---------- Tab switching ----------
-    function switchTab(tab) {
-      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-      document.querySelectorAll('[id^="tab-"]').forEach(d => d.style.display = 'none');
-      document.getElementById('tab-' + tab).style.display = 'block';
-      document.querySelector(`.tab:contains('${tab==='game'?'Bingo':tab==='wallet'?'Wallet':'Admin'}')`).classList.add('active');
-    }
+<!-- Withdraw Modal -->
+<div class="modal-overlay" id="withdrawOverlay">
+  <div class="modal">
+    <button class="close-x" data-close="withdrawOverlay">✕</button>
+    <h2>ገንዘብ ማውጣት / Withdraw</h2>
+    <p class="hint">ዝቅተኛ የማውጫ መጠን: <b>100 ብር</b> (Minimum withdrawal: 100 Birr). ቦነስ ገንዘብ ሊወጣ አይችልም (Bonus balance cannot be withdrawn).</p>
 
-    // ---------- Buy Card ----------
-    async function buyCard() {
-      if (!currentUser) return;
-      const res = await fetch('/buy-card', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: currentUser.userId })
-      });
-      const data = await res.json();
-      if (data.error) alert(data.error);
-      else {
-        document.getElementById('balance').innerText = data.balance;
-        loadGameState();
-      }
-    }
+    <div class="balance-split">
+      <div><small>የሚወጣ ገንዘብ</small><b id="wdRealBalance">0 ብር</b></div>
+      <div><small>ቦነስ (አይወጣም)</small><b id="wdBonusBalance">0 ብር</b></div>
+    </div>
 
-    // ---------- Wallet actions ----------
-    async function submitDeposit() {
-      const amount = document.getElementById('deposit-amount').value;
-      const file = document.getElementById('deposit-screenshot').files[0];
-      if (!amount || !file) return alert('Fill all fields');
-      const formData = new FormData();
-      formData.append('userId', currentUser.userId);
-      formData.append('amount', amount);
-      formData.append('screenshot', file);
-      const res = await fetch('/deposit', { method: 'POST', body: formData });
-      const data = await res.json();
-      if (data.success) alert('Deposit request submitted. Wait for admin approval.');
-      else alert(data.error);
-    }
+    <label>የሚወጣ መጠን (Amount, Birr)</label>
+    <input type="number" id="wdAmount" min="100" placeholder="e.g. 100">
 
-    async function submitWithdrawal() {
-      const amount = document.getElementById('withdraw-amount').value;
-      const details = document.getElementById('withdraw-details').value;
-      if (!amount || !details) return alert('Fill all fields');
-      const res = await fetch('/withdraw', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: currentUser.userId, amount, accountDetails: details })
-      });
-      const data = await res.json();
-      if (data.success) alert('Withdrawal request submitted. Wait for admin approval.');
-      else alert(data.error);
-    }
+    <label>የክፍያ አካውንት (Telebirr/CBE account or phone number)</label>
+    <input type="text" id="wdAccount" placeholder="e.g. 09xxxxxxxx">
 
-    // ---------- Admin functions ----------
-    async function startNewRound() {
-      const key = document.getElementById('admin-key').value;
-      const res = await fetch('/admin/start-round', {
-        method: 'POST',
-        headers: { 'X-Admin-Key': key }
-      });
-      const data = await res.json();
-      if (data.error) alert(data.error);
-      else alert('New round started!');
-    }
+    <button class="btn-danger" style="width:100%;margin-top:16px" id="submitWithdraw">አስገባ (Submit)</button>
+    <div class="status-msg" id="withdrawStatus"></div>
+  </div>
+</div>
 
-    async function startDraw() {
-      const key = document.getElementById('admin-key').value;
-      const res = await fetch('/admin/start-draw', {
-        method: 'POST',
-        headers: { 'X-Admin-Key': key }
-      });
-      const data = await res.json();
-      if (data.error) alert(data.error);
-      else alert('Draw started!');
-    }
+<!-- Cartella Picker Modal -->
+<div class="modal-overlay" id="cartellaOverlay">
+  <div class="modal">
+    <button class="close-x" data-close="cartellaOverlay">✕</button>
+    <h2>ካርቴላ ይምረጡ (Pick your cartella)</h2>
+    <p class="hint">ከ1 እስከ 200 ካርቴላዎች አሉ። የተመረጡ (ግራጫ) ካርቴላዎች ሊመረጡ አይችሉም።</p>
+    <div class="cartella-grid" id="cartellaGrid"></div>
+    <div class="status-msg" id="cartellaStatus"></div>
+    <button class="btn-primary" style="width:100%;margin-top:14px" id="confirmCartella" disabled>አረጋግጥ (Confirm)</button>
+  </div>
+</div>
 
-    async function loadDeposits() {
-      const key = document.getElementById('admin-key').value;
-      const res = await fetch('/admin/deposits', { headers: { 'X-Admin-Key': key } });
-      const deposits = await res.json();
-      const html = deposits.map(d => `
-        <div class="card">
-          <p><b>${d.username}</b> (${d.telegram_id}) – ${d.amount} Birr</p>
-          <img src="/${d.screenshot_path}" style="width:100%; border-radius:8px;"><br>
-          <button onclick="approveDeposit(${d.id})">Approve</button>
-          <button onclick="rejectDeposit(${d.id})">Reject</button>
-          <span>Status: ${d.status}</span>
-        </div>
-      `).join('');
-      document.getElementById('admin-deposits').innerHTML = html;
-    }
+<script>
+/* ---------------- Telegram / user identity ---------------- */
+const tg = window.Telegram ? window.Telegram.WebApp : null;
+if (tg) tg.ready();
 
-    async function approveDeposit(id) {
-      const key = document.getElementById('admin-key').value;
-      await fetch(`/admin/deposits/${id}/approve`, { method: 'POST', headers: { 'X-Admin-Key': key } });
-      loadDeposits();
-    }
-    async function rejectDeposit(id) {
-      const key = document.getElementById('admin-key').value;
-      await fetch(`/admin/deposits/${id}/reject`, { method: 'POST', headers: { 'X-Admin-Key': key } });
-      loadDeposits();
-    }
+const tgUser = tg && tg.initDataUnsafe && tg.initDataUnsafe.user;
+const TELEGRAM_ID = tgUser ? String(tgUser.id) : (localStorage.getItem('demo_uid') || (() => {
+  const id = 'demo_' + Math.floor(Math.random() * 1e6);
+  localStorage.setItem('demo_uid', id);
+  return id;
+})());
+const USERNAME = tgUser ? (tgUser.username || tgUser.first_name) : 'guest';
+const ROOM_ID = 'main-room'; // change if you support multiple simultaneous game rooms
 
-    async function loadWithdrawals() {
-      const key = document.getElementById('admin-key').value;
-      const res = await fetch('/admin/withdrawals', { headers: { 'X-Admin-Key': key } });
-      const withdrawals = await res.json();
-      const html = withdrawals.map(w => `
-        <div class="card">
-          <p><b>${w.username}</b> – ${w.amount} Birr<br>Account: ${w.account_details}</p>
-          <button onclick="approveWithdrawal(${w.id})">Approve</button>
-          <button onclick="rejectWithdrawal(${w.id})">Reject</button>
-          <span>Status: ${w.status}</span>
-        </div>
-      `).join('');
-      document.getElementById('admin-withdrawals').innerHTML = html;
-    }
+/* ---------------- Amharic number words (1-90) ---------------- */
+const AMHARIC_NUMBERS = {
+  1:'አንድ',2:'ሁለት',3:'ሶስት',4:'አራት',5:'አምስት',6:'ስድስት',7:'ሰባት',8:'ስምንት',9:'ዘጠኝ',10:'አስር',
+  11:'አስራ አንድ',12:'አስራ ሁለት',13:'አስራ ሶስት',14:'አስራ አራት',15:'አስራ አምስት',16:'አስራ ስድስት',17:'አስራ ሰባት',18:'አስራ ስምንት',19:'አስራ ዘጠኝ',20:'ሃያ',
+  21:'ሃያ አንድ',22:'ሃያ ሁለት',23:'ሃያ ሶስት',24:'ሃያ አራት',25:'ሃያ አምስት',26:'ሃያ ስድስት',27:'ሃያ ሰባት',28:'ሃያ ስምንት',29:'ሃያ ዘጠኝ',30:'ሰላሳ',
+  31:'ሰላሳ አንድ',32:'ሰላሳ ሁለት',33:'ሰላሳ ሶስት',34:'ሰላሳ አራት',35:'ሰላሳ አምስት',36:'ሰላሳ ስድስት',37:'ሰላሳ ሰባት',38:'ሰላሳ ስምንት',39:'ሰላሳ ዘጠኝ',40:'አርባ',
+  41:'አርባ አንድ',42:'አርባ ሁለት',43:'አርባ ሶስት',44:'አርባ አራት',45:'አርባ አምስት',46:'አርባ ስድስት',47:'አርባ ሰባት',48:'አርባ ስምንት',49:'አርባ ዘጠኝ',50:'ሃምሳ',
+  51:'ሃምሳ አንድ',52:'ሃምሳ ሁለት',53:'ሃምሳ ሶስት',54:'ሃምሳ አራት',55:'ሃምሳ አምስት',56:'ሃምሳ ስድስት',57:'ሃምሳ ሰባት',58:'ሃምሳ ስምንት',59:'ሃምሳ ዘጠኝ',60:'ስልሳ',
+  61:'ስልሳ አንድ',62:'ስልሳ ሁለት',63:'ስልሳ ሶስት',64:'ስልሳ አራት',65:'ስልሳ አምስት',66:'ስልሳ ስድስት',67:'ስልሳ ሰባት',68:'ስልሳ ስምንት',69:'ስልሳ ዘጠኝ',70:'ሰባ',
+  71:'ሰባ አንድ',72:'ሰባ ሁለት',73:'ሰባ ሶስት',74:'ሰባ አራት',75:'ሰባ አምስት',76:'ሰባ ስድስት',77:'ሰባ ሰባት',78:'ሰባ ስምንት',79:'ሰባ ዘጠኝ',80:'ሰማንያ',
+  81:'ሰማንያ አንድ',82:'ሰማንያ ሁለት',83:'ሰማንያ ሶስት',84:'ሰማንያ አራት',85:'ሰማንያ አምስት',86:'ሰማንያ ስድስት',87:'ሰማንያ ሰባት',88:'ሰማንያ ስምንት',89:'ሰማንያ ዘጠኝ',90:'ዘጠና'
+};
 
-    async function approveWithdrawal(id) {
-      const key = document.getElementById('admin-key').value;
-      await fetch(`/admin/withdrawals/${id}/approve`, { method: 'POST', headers: { 'X-Admin-Key': key } });
-      loadWithdrawals();
-    }
-    async function rejectWithdrawal(id) {
-      const key = document.getElementById('admin-key').value;
-      await fetch(`/admin/withdrawals/${id}/reject`, { method: 'POST', headers: { 'X-Admin-Key': key } });
-      loadWithdrawals();
-    }
+/* ---------------- Amharic voice caller (Web Speech API) ---------------- */
+let amharicVoice = null;
+function loadVoices() {
+  const voices = window.speechSynthesis ? window.speechSynthesis.getVoices() : [];
+  amharicVoice = voices.find(v => v.lang && v.lang.toLowerCase().startsWith('am')) || null;
+}
+if (window.speechSynthesis) {
+  loadVoices();
+  window.speechSynthesis.onvoiceschanged = loadVoices;
+}
 
-    // Auto-load game when socket connects
-    window.addEventListener('load', () => {
-      if (tg.initData.length) initTelegram();
-      else document.getElementById('login-screen').style.display = 'block';
+function speakNumber(n) {
+  const phrase = `ቁጥር ${AMHARIC_NUMBERS[n] || n}`;
+  document.getElementById('callerAmharic').textContent = phrase;
+  if (!window.speechSynthesis) return; // silently skip if unsupported
+  window.speechSynthesis.cancel(); // stop any overlapping speech
+  const utter = new SpeechSynthesisUtterance(phrase);
+  utter.lang = 'am-ET';
+  if (amharicVoice) utter.voice = amharicVoice;
+  utter.rate = 0.9;
+  window.speechSynthesis.speak(utter);
+}
+
+/* ---------------- Board rendering (classic 1-75 B-I-N-G-O columns) ---------------- */
+const board = document.getElementById('board');
+const STAKE = 10; // Birr per cartella - static display value, wire this to real betting logic when you add it
+document.getElementById('statStake').textContent = STAKE;
+
+for (let i = 1; i <= 75; i++) {
+  const cell = document.createElement('div');
+  cell.id = 'cell-' + i;
+  cell.textContent = i;
+  board.appendChild(cell);
+}
+
+function letterFor(n) {
+  if (n <= 15) return 'B';
+  if (n <= 30) return 'I';
+  if (n <= 45) return 'N';
+  if (n <= 60) return 'G';
+  return 'O';
+}
+
+function markCalled(numbers) {
+  numbers.forEach(n => {
+    const cell = document.getElementById('cell-' + n);
+    if (cell) cell.classList.add('called');
+  });
+}
+
+function renderLastCalled(calledNumbers) {
+  const row = document.getElementById('lastCalledRow');
+  row.innerHTML = '';
+  calledNumbers.slice(-3).reverse().forEach(n => {
+    const letter = letterFor(n);
+    const ball = document.createElement('div');
+    ball.className = `ball ball-${letter}`;
+    ball.textContent = `${letter}${n}`;
+    row.appendChild(ball);
+  });
+}
+
+/* ---------------- Socket.io: real-time number calling ---------------- */
+const socket = io();
+socket.emit('joinRoom', ROOM_ID);
+
+socket.on('roomState', (state) => {
+  document.querySelectorAll('.board div').forEach(c => c.classList.remove('called'));
+  markCalled(state.calledNumbers || []);
+  renderLastCalled(state.calledNumbers || []);
+  document.getElementById('statCalls').textContent = (state.calledNumbers || []).length;
+  if (typeof state.playerCount === 'number') {
+    document.getElementById('statPlayers').textContent = state.playerCount;
+    document.getElementById('statPrize').textContent = state.playerCount * STAKE;
+  }
+  daubMyCard(state.calledNumbers || []);
+});
+
+socket.on('numberCalled', (data) => {
+  const letter = letterFor(data.number);
+  document.getElementById('callerNumber').textContent = `${letter}${data.number}`;
+  markCalled([data.number]);
+  renderLastCalled(data.calledNumbers);
+  document.getElementById('statCalls').textContent = data.calledNumbers.length;
+  if (soundOn) speakNumber(data.number);
+  else document.getElementById('callerAmharic').textContent = `ቁጥር ${AMHARIC_NUMBERS[data.number] || data.number}`;
+  daubMyCard(data.calledNumbers);
+});
+
+socket.on('playerCount', (count) => {
+  document.getElementById('statPlayers').textContent = count;
+  document.getElementById('statPrize').textContent = count * STAKE;
+});
+
+socket.on('gameOver', () => {
+  document.getElementById('callerAmharic').textContent = 'ጨዋታው አልቋል (Game over)';
+});
+
+socket.on('callingState', (state) => {
+  const chip = document.getElementById('autoToggle');
+  chip.classList.toggle('active', state.active);
+  document.getElementById('autoStatusText').textContent = state.active ? 'ON' : 'OFF';
+});
+
+/* ---------------- Sound toggle ----------------
+   Note: "Auto" is a room-wide, server-controlled status (shown above, not clickable) —
+   this keeps the game fair, since no single player can pause calling for everyone else.
+   Only Sound (this player's own Amharic voice) is under the player's control. */
+let soundOn = true;
+
+document.getElementById('soundToggle').onclick = () => {
+  soundOn = !soundOn;
+  document.getElementById('soundToggle').classList.toggle('active', soundOn);
+  if (!soundOn && window.speechSynthesis) window.speechSynthesis.cancel();
+};
+
+/* ---------------- Cartella (200 tickets) ---------------- */
+let myCartellaId = null;
+let myCard = null; // [ [B..5], [I..5], [N..5 w/ 'FREE'], [G..5], [O..5] ]
+let takenCartellas = {};
+let pendingSelection = null;
+
+const cartellaGrid = document.getElementById('cartellaGrid');
+for (let i = 1; i <= 200; i++) {
+  const btn = document.createElement('button');
+  btn.textContent = i;
+  btn.dataset.id = i;
+  btn.onclick = () => {
+    if (btn.classList.contains('taken')) return;
+    pendingSelection = i;
+    document.querySelectorAll('.cartella-grid button').forEach(b => b.classList.remove('selected'));
+    btn.classList.add('selected');
+    document.getElementById('confirmCartella').disabled = false;
+  };
+  cartellaGrid.appendChild(btn);
+}
+
+function renderCartellaGrid() {
+  document.querySelectorAll('.cartella-grid button').forEach(btn => {
+    const id = Number(btn.dataset.id);
+    const ownedByOther = takenCartellas[id] && takenCartellas[id] !== TELEGRAM_ID;
+    btn.classList.toggle('taken', !!ownedByOther);
+    btn.classList.toggle('selected', id === myCartellaId);
+  });
+}
+
+document.getElementById('openCartella').onclick = () => {
+  document.getElementById('cartellaOverlay').classList.add('open');
+  renderCartellaGrid();
+};
+
+document.getElementById('confirmCartella').onclick = () => {
+  if (!pendingSelection) return;
+  socket.emit('selectCartella', { roomId: ROOM_ID, cartellaId: pendingSelection, telegram_id: TELEGRAM_ID });
+};
+
+socket.on('cartellaState', (state) => {
+  takenCartellas = state.taken || {};
+  renderCartellaGrid();
+});
+
+socket.on('cartellaError', (err) => {
+  const statusEl = document.getElementById('cartellaStatus');
+  statusEl.className = 'status-msg status-err';
+  statusEl.textContent = err.message;
+});
+
+socket.on('cartellaAssigned', (data) => {
+  myCartellaId = data.cartellaId;
+  myCard = data.card;
+  document.getElementById('cartellaStatus').textContent = '';
+  document.getElementById('cartellaOverlay').classList.remove('open');
+  document.getElementById('myCartellaLabel').textContent = `#${myCartellaId}`;
+  renderMyCard();
+});
+
+function renderMyCard() {
+  if (!myCard) return;
+  const widget = document.getElementById('myCardWidget');
+  widget.classList.add('visible');
+  document.getElementById('myCardId').textContent = `#${myCartellaId}`;
+
+  const grid = document.getElementById('myCardGrid');
+  grid.innerHTML = '';
+  ['B', 'I', 'N', 'G', 'O'].forEach((letter, colIdx) => {
+    const hdr = document.createElement('div');
+    hdr.className = `hdr col-${letter}`;
+    hdr.textContent = letter;
+    grid.appendChild(hdr);
+  });
+  for (let row = 0; row < 5; row++) {
+    for (let col = 0; col < 5; col++) {
+      const value = myCard[col][row];
+      const cell = document.createElement('div');
+      cell.className = 'cell';
+      cell.textContent = value === 'FREE' ? '★' : value;
+      if (value === 'FREE') cell.classList.add('free', 'daubed');
+      cell.dataset.value = value;
+      grid.appendChild(cell);
+    }
+  }
+  daubMyCard(currentCalledNumbers);
+}
+
+let currentCalledNumbers = [];
+function daubMyCard(calledNumbers) {
+  currentCalledNumbers = calledNumbers;
+  if (!myCard) return;
+  const called = new Set(calledNumbers);
+  document.querySelectorAll('#myCardGrid .cell').forEach(cell => {
+    const v = cell.dataset.value;
+    if (v !== 'FREE' && called.has(Number(v))) cell.classList.add('daubed');
+  });
+}
+
+/* ---------------- Wallet ---------------- */
+async function refreshWallet() {
+  const res = await fetch(`/api/wallet/${TELEGRAM_ID}?username=${encodeURIComponent(USERNAME)}`);
+  const data = await res.json();
+  document.getElementById('walletPill').innerHTML =
+    `<b>${data.balance_real} ብር</b><small>ቦነስ: ${data.balance_bonus} ብር</small>`;
+  document.getElementById('wdRealBalance').textContent = data.balance_real + ' ብር';
+  document.getElementById('wdBonusBalance').textContent = data.balance_bonus + ' ብር';
+  return data;
+}
+
+/* ---------------- Loading screen ---------------- */
+let socketReady = false;
+let walletReady = false;
+function maybeHideLoading() {
+  if (socketReady && walletReady) {
+    document.getElementById('loadingScreen').classList.add('hidden');
+  }
+}
+socket.on('connect', () => { socketReady = true; maybeHideLoading(); });
+// Failsafe: never block the UI for more than 4s even if something is slow/offline.
+setTimeout(() => { socketReady = true; walletReady = true; maybeHideLoading(); }, 4000);
+
+refreshWallet().then(() => { walletReady = true; maybeHideLoading(); }).catch(() => { walletReady = true; maybeHideLoading(); });
+
+/* ---------------- Modal open/close ---------------- */
+document.getElementById('openDeposit').onclick = () => document.getElementById('depositOverlay').classList.add('open');
+document.getElementById('openWithdraw').onclick = async () => {
+  await refreshWallet();
+  document.getElementById('withdrawOverlay').classList.add('open');
+};
+document.querySelectorAll('[data-close]').forEach(btn => {
+  btn.onclick = () => document.getElementById(btn.dataset.close).classList.remove('open');
+});
+document.querySelectorAll('.copy-btn').forEach(btn => {
+  btn.onclick = () => {
+    navigator.clipboard.writeText(btn.dataset.copy);
+    btn.textContent = 'Copied!';
+    setTimeout(() => btn.textContent = 'Copy', 1200);
+  };
+});
+
+/* ---------------- Deposit submit ---------------- */
+document.getElementById('submitDeposit').onclick = async () => {
+  const amount = document.getElementById('depAmount').value;
+  const method = document.getElementById('depMethod').value;
+  const txn_id = document.getElementById('depTxn').value.trim();
+  const fileInput = document.getElementById('depScreenshot');
+  const statusEl = document.getElementById('depositStatus');
+
+  if (!amount || !txn_id) {
+    statusEl.className = 'status-msg status-err';
+    statusEl.textContent = 'እባክዎ መጠን እና የግብይት መለያ ያስገቡ (Please enter amount and transaction ID).';
+    return;
+  }
+  if (!fileInput.files[0]) {
+    statusEl.className = 'status-msg status-err';
+    statusEl.textContent = 'እባክዎ የኤስኤምኤስ ማረጋገጫ ፎቶ ያያይዙ (Please attach the SMS confirmation screenshot).';
+    return;
+  }
+
+  const formData = new FormData();
+  formData.append('telegram_id', TELEGRAM_ID);
+  formData.append('username', USERNAME);
+  formData.append('amount', amount);
+  formData.append('method', method);
+  formData.append('txn_id', txn_id);
+  formData.append('screenshot', fileInput.files[0]);
+
+  const submitBtn = document.getElementById('submitDeposit');
+  submitBtn.disabled = true;
+  submitBtn.textContent = 'እየላከ ነው... (Submitting...)';
+  statusEl.className = 'status-msg';
+  statusEl.textContent = '';
+
+  try {
+    const res = await fetch('/api/deposit', { method: 'POST', body: formData });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed');
+    statusEl.className = 'status-msg status-ok';
+    statusEl.textContent = 'ጥያቄዎ ተልኳል! አድሚን እስኪያረጋግጥ ይጠብቁ። (Request sent! Waiting for admin approval.)';
+    document.getElementById('depAmount').value = '';
+    document.getElementById('depTxn').value = '';
+    fileInput.value = '';
+  } catch (err) {
+    statusEl.className = 'status-msg status-err';
+    statusEl.textContent = err.message;
+  } finally {
+    submitBtn.disabled = false;
+    submitBtn.textContent = 'አስገባ (Submit)';
+  }
+};
+
+/* ---------------- Withdraw submit ---------------- */
+document.getElementById('submitWithdraw').onclick = async () => {
+  const amount = document.getElementById('wdAmount').value;
+  const account_info = document.getElementById('wdAccount').value.trim();
+  const statusEl = document.getElementById('withdrawStatus');
+
+  if (!amount || !account_info) {
+    statusEl.className = 'status-msg status-err';
+    statusEl.textContent = 'እባክዎ መጠን እና አካውንት መረጃ ያስገቡ (Please enter amount and account info).';
+    return;
+  }
+
+  const submitBtn = document.getElementById('submitWithdraw');
+  submitBtn.disabled = true;
+  submitBtn.textContent = 'እየላከ ነው... (Submitting...)';
+  statusEl.className = 'status-msg';
+  statusEl.textContent = '';
+
+  try {
+    const res = await fetch('/api/withdraw', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ telegram_id: TELEGRAM_ID, amount, account_info })
     });
-  </script>
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed');
+    statusEl.className = 'status-msg status-ok';
+    statusEl.textContent = 'ጥያቄዎ ተልኳል! አድሚን እስኪያረጋግጥ ይጠብቁ። (Request sent! Waiting for admin approval.)';
+    document.getElementById('wdAmount').value = '';
+    document.getElementById('wdAccount').value = '';
+    refreshWallet();
+  } catch (err) {
+    statusEl.className = 'status-msg status-err';
+    statusEl.textContent = err.message;
+  } finally {
+    submitBtn.disabled = false;
+    submitBtn.textContent = 'አስገባ (Submit)';
+  }
+};
+</script>
 </body>
 </html>
