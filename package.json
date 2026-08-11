@@ -1,7 +1,7 @@
 {
-  "name": "telegram-bingo-mini-app",
-  "version": "1.0.0",
-  "description": "Telegram Bingo Mini App with Amharic auto-caller, deposit/withdrawal wallet system",
+  "name": "zemen-bingo-telegram-mini-app",
+  "version": "2.0.0",
+  "description": "ዘመን ቢንጎ - Telegram Bingo Mini App: multiplayer auto-caller, 200 cartellas, wallet, deposit/withdraw, 30% platform commission with equal winner split",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
