@@ -1,17 +1,17 @@
 /**
- * Telegram Bingo Mini App - Backend
+ * ዘመን ቢንጎ (Zemen Bingo) - Telegram Bingo Mini App Backend
  * Express + Socket.io + SQLite (better-sqlite3) + Telegram Bot (node-telegram-bot-api)
  *
- * ENV VARS REQUIRED (put these in a .env file or your host's env settings):
- *   BOT_TOKEN        - Telegram bot token from @BotFather
- *   ADMIN_CHAT_ID     - Your personal Telegram chat id (the admin who approves deposits/withdrawals)
- *   ADMIN_DASHBOARD_KEY - a secret string used to protect the /admin dashboard routes
- *   PORT              - optional, defaults to 3000
+ * ENV VARS REQUIRED (.env file):
+ *   BOT_TOKEN            - Telegram bot token from @BotFather
+ *   ADMIN_CHAT_ID        - Your personal Telegram chat id (admin who approves deposits/withdrawals)
+ *   ADMIN_DASHBOARD_KEY  - secret string protecting the /api/admin/* routes
+ *   PORT                 - optional, defaults to 3000
  *
- * NOTE ON COMPLIANCE:
- *   This app moves real money in/out of user wallets. Before going live, make sure
- *   running a paid bingo game with real-money deposits/withdrawals is legal in the
- *   jurisdiction you operate in, and that you hold any required gambling/payment license.
+ * COMPLIANCE NOTE: this app moves real money in and out of user wallets and pays out
+ * game winnings automatically. Confirm running a paid bingo game like this is legal
+ * in your target market and that you hold any required gambling/payment license
+ * before launching publicly.
  */
 
 require('dotenv').config();
@@ -29,9 +29,16 @@ const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID;
 const ADMIN_DASHBOARD_KEY = process.env.ADMIN_DASHBOARD_KEY || 'change-me';
 
+// ---------- Game / money constants ----------
 const MIN_DEPOSIT = 50;
 const MIN_WITHDRAW = 100;
-const SIGNUP_BONUS = 150; // Birr, credited to balance_bonus for brand new users (non-withdrawable)
+const SIGNUP_BONUS = 150;       // Birr credited to balance_bonus for brand new users (non-withdrawable)
+const STAKE = 10;                // Birr per cartella, per round
+const COMMISSION_RATE = 0.30;    // platform takes 30% of the pot
+const MIN_PLAYERS_FOR_ROUND = 4; // bots fill up to this many "players" when real players are short
+const CALL_INTERVAL_MS = 4000;
+const WINNER_WINDOW_MS = 5000;   // window during which other valid winners can also claim, to split the pot
+const NEXT_ROUND_DELAY_MS = 8000;
 
 // ---------- App / Server setup ----------
 const app = express();
@@ -90,13 +97,23 @@ CREATE TABLE IF NOT EXISTS withdrawals (
   created_at TEXT DEFAULT (datetime('now')),
   resolved_at TEXT
 );
+
+CREATE TABLE IF NOT EXISTS commission_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  room_id TEXT,
+  pot INTEGER,
+  commission INTEGER,
+  payout INTEGER,
+  winners_count INTEGER,
+  created_at TEXT DEFAULT (datetime('now'))
+);
 `);
 
 function getOrCreateUser(telegram_id, username) {
   let user = db.prepare('SELECT * FROM users WHERE telegram_id = ?').get(telegram_id);
   if (!user) {
     // Brand new user: create the account and credit the signup bonus.
-    // This goes to balance_bonus, which can be used to play but can never be withdrawn.
+    // Goes to balance_bonus - playable, but can never be withdrawn.
     db.prepare('INSERT INTO users (telegram_id, username, balance_real, balance_bonus) VALUES (?, ?, 0, ?)')
       .run(telegram_id, username || null, SIGNUP_BONUS);
     user = db.prepare('SELECT * FROM users WHERE telegram_id = ?').get(telegram_id);
@@ -106,6 +123,29 @@ function getOrCreateUser(telegram_id, username) {
   return user;
 }
 
+function getWalletTotal(telegram_id) {
+  const user = getOrCreateUser(telegram_id);
+  return user.balance_real + user.balance_bonus;
+}
+
+// Deducts a stake, spending bonus balance first (so promo bonus gets used before real money).
+function deductStake(telegram_id, amount) {
+  const user = getOrCreateUser(telegram_id);
+  const fromBonus = Math.min(user.balance_bonus, amount);
+  const fromReal = amount - fromBonus;
+  db.prepare('UPDATE users SET balance_bonus = balance_bonus - ?, balance_real = balance_real - ? WHERE telegram_id = ?')
+    .run(fromBonus, fromReal, telegram_id);
+}
+
+// Winnings are always real, withdrawable money.
+function creditWinnings(telegram_id, amount) {
+  db.prepare('UPDATE users SET balance_real = balance_real + ? WHERE telegram_id = ?').run(amount, telegram_id);
+}
+
+function refundStake(telegram_id, amount) {
+  db.prepare('UPDATE users SET balance_real = balance_real + ? WHERE telegram_id = ?').run(amount, telegram_id);
+}
+
 // ---------- Telegram Bot ----------
 let bot = null;
 if (BOT_TOKEN) {
@@ -113,15 +153,14 @@ if (BOT_TOKEN) {
 
   bot.onText(/\/start/, (msg) => {
     getOrCreateUser(String(msg.chat.id), msg.from.username || msg.from.first_name);
-    bot.sendMessage(msg.chat.id, 'Welcome to Bingo! Open the mini app to play, deposit, and withdraw.');
+    bot.sendMessage(msg.chat.id, `እንኳን ደህና መጡ ወደ ዘመን ቢንጎ! ${SIGNUP_BONUS} ብር ቦነስ አግኝተዋል። ጨዋታውን ለመክፈት Mini App ይክፈቱ።`);
   });
 
-  // Admin approves/rejects deposits and withdrawals via inline buttons
   bot.on('callback_query', async (query) => {
     if (String(query.message.chat.id) !== String(ADMIN_CHAT_ID)) {
       return bot.answerCallbackQuery(query.id, { text: 'Not authorized.' });
     }
-    const [action, type, id] = query.data.split(':'); // e.g. "approve:deposit:12"
+    const [action, type, id] = query.data.split(':');
 
     try {
       if (type === 'deposit') {
@@ -190,7 +229,15 @@ function notifyAdminWithdrawal(withdrawal) {
   });
 }
 
-// ---------- Business logic ----------
+function notifyAdminRound(roomId, pot, commission, winners, share) {
+  if (!bot || !ADMIN_CHAT_ID) return;
+  const text = winners.length > 0
+    ? `🏆 Round finished (${roomId})\nPot: ${pot} Birr\nCommission (30%): ${commission} Birr\nWinners: ${winners.length} x ${share} Birr each`
+    : `↩️ Round finished (${roomId}) with no winner — pot of ${pot} Birr fully refunded to players.`;
+  bot.sendMessage(ADMIN_CHAT_ID, text).catch(() => {});
+}
+
+// ---------- Deposit / Withdrawal business logic ----------
 function approveDeposit(id) {
   const deposit = db.prepare('SELECT * FROM deposits WHERE id = ?').get(id);
   if (!deposit) throw new Error('Deposit not found');
@@ -217,7 +264,6 @@ function approveWithdrawal(id) {
   const w = db.prepare('SELECT * FROM withdrawals WHERE id = ?').get(id);
   if (!w) throw new Error('Withdrawal not found');
   if (w.status !== 'pending') throw new Error('Already resolved');
-  // funds were already deducted (held) when the request was created
   db.prepare("UPDATE withdrawals SET status = 'approved', resolved_at = datetime('now') WHERE id = ?").run(id);
   return { telegram_id: w.telegram_id, amount: w.amount };
 }
@@ -226,7 +272,6 @@ function rejectWithdrawal(id) {
   const w = db.prepare('SELECT * FROM withdrawals WHERE id = ?').get(id);
   if (!w) throw new Error('Withdrawal not found');
   if (w.status !== 'pending') throw new Error('Already resolved');
-  // refund the held amount back to the user's withdrawable balance
   db.prepare('UPDATE users SET balance_real = balance_real + ? WHERE telegram_id = ?').run(w.amount, w.telegram_id);
   db.prepare("UPDATE withdrawals SET status = 'rejected', resolved_at = datetime('now') WHERE id = ?").run(id);
   return { telegram_id: w.telegram_id, amount: w.amount };
@@ -239,7 +284,8 @@ app.get('/api/wallet/:telegram_id', (req, res) => {
     telegram_id: user.telegram_id,
     balance_real: user.balance_real,
     balance_bonus: user.balance_bonus,
-    total_balance: user.balance_real + user.balance_bonus
+    total_balance: user.balance_real + user.balance_bonus,
+    stake: STAKE
   });
 });
 
@@ -299,7 +345,6 @@ app.post('/api/withdraw', (req, res) => {
     });
   }
 
-  // Hold the funds immediately so the user can't double-spend while pending.
   db.prepare('UPDATE users SET balance_real = balance_real - ? WHERE telegram_id = ?').run(amt, telegram_id);
 
   const info = db.prepare(
@@ -330,6 +375,10 @@ app.get('/api/admin/deposits', requireAdminKey, (req, res) => {
 
 app.get('/api/admin/withdrawals', requireAdminKey, (req, res) => {
   res.json(db.prepare("SELECT * FROM withdrawals WHERE status = 'pending' ORDER BY id DESC").all());
+});
+
+app.get('/api/admin/commission-log', requireAdminKey, (req, res) => {
+  res.json(db.prepare('SELECT * FROM commission_log ORDER BY id DESC LIMIT 200').all());
 });
 
 app.post('/api/admin/deposit/:id/approve', requireAdminKey, (req, res) => {
@@ -371,14 +420,9 @@ app.post('/api/admin/withdraw/:id/mark-paid', requireAdminKey, (req, res) => {
   res.json({ success: true });
 });
 
-// ---------- Bingo game / Socket.io (Amharic auto-caller) ----------
-// Amharic number words 1-90 used to build "ቁጥር N" style announcements client-side via TTS.
-// The server just tracks which numbers have been called and broadcasts them; the browser
-// speaks them using the Web Speech API (see public/index.html).
-const gameRooms = {}; // roomId -> { calledNumbers: [], remaining: [1..75], intervalId, takenCartellas: {} }
-const CARTELLA_COUNT = 200;
+// ================= BINGO GAME ENGINE =================
 
-// Deterministic PRNG so cartella #N always generates the exact same card for every player/session.
+// Deterministic PRNG: cartella #N always generates the exact same card for everyone.
 function mulberry32(seed) {
   return function () {
     seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
@@ -395,7 +439,8 @@ function shuffle(arr, rand) {
   }
   return a;
 }
-// Standard 75-ball card: column B=1-15, I=16-30, N=31-45 (center FREE), G=46-60, O=61-75.
+const CARTELLA_COUNT = 200;
+// Standard 75-ball card: B=1-15, I=16-30, N=31-45 (center FREE), G=46-60, O=61-75.
 function generateCartella(id) {
   const rand = mulberry32((id * 2654435761) % 2147483647);
   const ranges = [[1, 15], [16, 30], [31, 45], [46, 60], [61, 75]];
@@ -404,16 +449,38 @@ function generateCartella(id) {
     for (let n = lo; n <= hi; n++) nums.push(n);
     return shuffle(nums, rand).slice(0, 5);
   });
-  cols[2][2] = 'FREE'; // middle cell of the N column
-  return cols; // [ [B1..B5], [I1..I5], [N1..N5], [G1..G5], [O1..O5] ]
+  cols[2][2] = 'FREE';
+  return cols; // [ [B1..5], [I1..5], [N1..5], [G1..5], [O1..5] ]
 }
+
+function isCardWinning(card, calledSet) {
+  const isMarked = (col, row) => {
+    const v = card[col][row];
+    return v === 'FREE' || calledSet.has(v);
+  };
+  for (let row = 0; row < 5; row++) if ([0, 1, 2, 3, 4].every((col) => isMarked(col, row))) return true;
+  for (let col = 0; col < 5; col++) if ([0, 1, 2, 3, 4].every((row) => isMarked(col, row))) return true;
+  if ([0, 1, 2, 3, 4].every((i) => isMarked(i, i))) return true;
+  if ([0, 1, 2, 3, 4].every((i) => isMarked(i, 4 - i))) return true;
+  if (isMarked(0, 0) && isMarked(4, 0) && isMarked(0, 4) && isMarked(4, 4)) return true;
+  return false;
+}
+
+const BOT_NAMES = ['ሰላም 🤖', 'አበል 🤖', 'መቅደስ 🤖', 'ናሆም 🤖', 'ቤቲ 🤖', 'ዮናስ 🤖', 'ሳራ 🤖', 'ዳዊት 🤖', 'ሄለን 🤖', 'ካሌብ 🤖'];
+
+const gameRooms = {}; // roomId -> room state
 
 function createRoom(roomId) {
   gameRooms[roomId] = {
     calledNumbers: [],
     remaining: Array.from({ length: 75 }, (_, i) => i + 1),
     intervalId: null,
-    takenCartellas: {} // cartellaId -> telegram_id
+    takenCartellas: {},   // cartellaId -> telegram_id (or 'bot_<id>' for filler bots)
+    bots: [],              // [{ cartellaId, name }]
+    playerStakes: {},      // telegram_id -> amount staked this round (real players only)
+    pot: 0,
+    pendingWinners: [],    // telegram_ids who validly claimed Bingo this round
+    winnerWindowTimer: null
   };
   return gameRooms[roomId];
 }
@@ -423,9 +490,35 @@ function getPlayerCount(roomId) {
   return room ? room.size : 0;
 }
 
+// Fills the room with cosmetic bot "players" (each auto-picking a cartella) whenever real
+// players are alone or too few, so a round always feels populated and can always start.
+// Bots never pay a stake, are never eligible to win, and never dilute the real pot.
+function ensureBots(roomId) {
+  const room = gameRooms[roomId] || createRoom(roomId);
+  const realCount = getPlayerCount(roomId);
+  const targetBots = realCount >= 1 && realCount < MIN_PLAYERS_FOR_ROUND ? (MIN_PLAYERS_FOR_ROUND - realCount) : 0;
+
+  while (room.bots.length > targetBots) {
+    const removed = room.bots.pop();
+    delete room.takenCartellas[removed.cartellaId];
+  }
+  while (room.bots.length < targetBots) {
+    const available = [];
+    for (let i = 1; i <= CARTELLA_COUNT; i++) if (!room.takenCartellas[i]) available.push(i);
+    if (available.length === 0) break;
+    const cartellaId = available[Math.floor(Math.random() * available.length)];
+    const name = BOT_NAMES[Math.floor(Math.random() * BOT_NAMES.length)];
+    room.takenCartellas[cartellaId] = 'bot_' + cartellaId;
+    room.bots.push({ cartellaId, name });
+  }
+
+  io.to(roomId).emit('cartellaState', { taken: room.takenCartellas, bots: room.bots });
+  io.to(roomId).emit('playerCount', realCount + room.bots.length);
+}
+
 function startCallingLoop(roomId) {
   const room = gameRooms[roomId] || createRoom(roomId);
-  if (room.intervalId || room.remaining.length === 0) return; // already running or nothing left to call
+  if (room.intervalId || room.remaining.length === 0) return;
 
   io.to(roomId).emit('callingState', { active: true });
   room.intervalId = setInterval(() => {
@@ -434,29 +527,87 @@ function startCallingLoop(roomId) {
       room.intervalId = null;
       io.to(roomId).emit('callingState', { active: false });
       io.to(roomId).emit('gameOver');
+      // No one claimed a valid Bingo before the pot ran out of numbers - refund everyone.
+      if (!room.winnerWindowTimer) settleRoundWithNoWinner(roomId);
       return;
     }
     const idx = Math.floor(Math.random() * room.remaining.length);
     const number = room.remaining.splice(idx, 1)[0];
     room.calledNumbers.push(number);
     io.to(roomId).emit('numberCalled', { number, calledNumbers: room.calledNumbers });
-  }, 4000); // one number every 4 seconds, adjust to taste
+  }, CALL_INTERVAL_MS);
+}
+
+function settleRoundWithNoWinner(roomId) {
+  const room = gameRooms[roomId];
+  if (!room) return;
+  Object.keys(room.playerStakes).forEach((tid) => refundStake(tid, room.playerStakes[tid]));
+  io.to(roomId).emit('roundResult', { winners: [], pot: room.pot, commission: 0, payout: 0, share: 0, refunded: true });
+  notifyAdminRound(roomId, room.pot, 0, [], 0);
+  scheduleNextRound(roomId);
+}
+
+function finalizeRound(roomId) {
+  const room = gameRooms[roomId];
+  if (!room) return;
+  if (room.intervalId) { clearInterval(room.intervalId); room.intervalId = null; }
+  room.winnerWindowTimer = null;
+
+  const winners = room.pendingWinners.slice();
+  const pot = room.pot;
+  const commission = Math.round(pot * COMMISSION_RATE * 100) / 100;
+  const payout = Math.round((pot - commission) * 100) / 100;
+  const share = winners.length > 0 ? Math.round((payout / winners.length) * 100) / 100 : 0;
+
+  winners.forEach((tid) => creditWinnings(tid, share));
+
+  db.prepare('INSERT INTO commission_log (room_id, pot, commission, payout, winners_count) VALUES (?, ?, ?, ?, ?)')
+    .run(roomId, pot, commission, payout, winners.length);
+
+  io.to(roomId).emit('callingState', { active: false });
+  io.to(roomId).emit('roundResult', {
+    winners: winners.map((tid) => ({
+      telegram_id: tid,
+      cartellaId: Object.keys(room.takenCartellas).find((c) => room.takenCartellas[c] === tid)
+    })),
+    pot, commission, payout, share
+  });
+  notifyAdminRound(roomId, pot, commission, winners, share);
+  scheduleNextRound(roomId);
+}
+
+function scheduleNextRound(roomId) {
+  setTimeout(() => {
+    createRoom(roomId);
+    io.to(roomId).emit('roomState', { calledNumbers: [], playerCount: getPlayerCount(roomId) });
+    io.to(roomId).emit('cartellaState', { taken: {}, bots: [] });
+    io.to(roomId).emit('callingState', { active: false });
+    io.to(roomId).emit('potUpdate', { pot: 0, players: 0 });
+    if (getPlayerCount(roomId) > 0) {
+      ensureBots(roomId);
+      startCallingLoop(roomId);
+    }
+  }, NEXT_ROUND_DELAY_MS);
 }
 
 io.on('connection', (socket) => {
   socket.on('joinRoom', (roomId) => {
     socket.join(roomId);
     const room = gameRooms[roomId] || createRoom(roomId);
-    socket.emit('roomState', { calledNumbers: room.calledNumbers, playerCount: getPlayerCount(roomId) });
-    socket.emit('cartellaState', { taken: room.takenCartellas });
+    socket.emit('roomState', { calledNumbers: room.calledNumbers, playerCount: getPlayerCount(roomId) + room.bots.length, stake: STAKE });
+    socket.emit('cartellaState', { taken: room.takenCartellas, bots: room.bots });
+    socket.emit('potUpdate', { pot: room.pot, players: Object.keys(room.playerStakes).length });
     socket.emit('callingState', { active: !!room.intervalId });
-    io.to(roomId).emit('playerCount', getPlayerCount(roomId));
 
-    // Auto-start the shared caller for the room as soon as there's at least one player.
-    // Calling is a room-wide, server-controlled process — no single player can start/stop it
-    // for everyone else, which keeps the game fair in multiplayer.
-    if (!room.intervalId && room.remaining.length > 0) {
-      startCallingLoop(roomId);
+    ensureBots(roomId);
+    if (!room.intervalId && room.remaining.length > 0) startCallingLoop(roomId);
+  });
+
+  socket.on('disconnecting', () => {
+    for (const roomId of socket.rooms) {
+      if (roomId !== socket.id) {
+        setTimeout(() => ensureBots(roomId), 100); // let the room's member count update first
+      }
     }
   });
 
@@ -464,37 +615,61 @@ io.on('connection', (socket) => {
     const room = gameRooms[roomId] || createRoom(roomId);
     const id = Number(cartellaId);
     if (!Number.isInteger(id) || id < 1 || id > CARTELLA_COUNT) {
-      return socket.emit('cartellaError', { message: 'Invalid cartella number.' });
+      return socket.emit('cartellaError', { code: 'INVALID', message: 'Invalid cartella number.' });
     }
     if (room.takenCartellas[id] && room.takenCartellas[id] !== telegram_id) {
-      return socket.emit('cartellaError', { message: 'This cartella is already taken. Pick another.' });
+      return socket.emit('cartellaError', { code: 'TAKEN', message: 'This cartella is already taken. Pick another.' });
     }
-    // Release any cartella this user held previously (one active cartella per player per room).
+
+    // Charge the stake once per player per round; switching cartella afterwards is free.
+    if (!room.playerStakes[telegram_id]) {
+      if (getWalletTotal(telegram_id) < STAKE) {
+        return socket.emit('cartellaError', {
+          code: 'INSUFFICIENT_BALANCE',
+          message: `በቂ ሂሳብ የለዎትም። ለመጫወት ${STAKE} ብር ወይም ከዚያ በላይ ያስፈልጋል። እባክዎ ገንዘብ ያስገቡ። (Insufficient balance - deposit at least ${STAKE} Birr to play.)`
+        });
+      }
+      deductStake(telegram_id, STAKE);
+      room.playerStakes[telegram_id] = STAKE;
+      room.pot += STAKE;
+      io.to(roomId).emit('potUpdate', { pot: room.pot, players: Object.keys(room.playerStakes).length });
+    }
+
     Object.keys(room.takenCartellas).forEach((cid) => {
       if (room.takenCartellas[cid] === telegram_id) delete room.takenCartellas[cid];
     });
     room.takenCartellas[id] = telegram_id;
     socket.emit('cartellaAssigned', { cartellaId: id, card: generateCartella(id) });
-    io.to(roomId).emit('cartellaState', { taken: room.takenCartellas });
+    io.to(roomId).emit('cartellaState', { taken: room.takenCartellas, bots: room.bots });
   });
 
-  socket.on('disconnecting', () => {
-    for (const roomId of socket.rooms) {
-      if (roomId !== socket.id) {
-        // subtract 1 since this socket hasn't left yet at 'disconnecting' time
-        io.to(roomId).emit('playerCount', Math.max(0, getPlayerCount(roomId) - 1));
-      }
+  socket.on('claimBingo', ({ roomId, telegram_id }) => {
+    const room = gameRooms[roomId];
+    if (!room) return;
+    const myCartellaId = Object.keys(room.takenCartellas).find((cid) => room.takenCartellas[cid] === telegram_id);
+    if (!myCartellaId) {
+      return socket.emit('bingoError', { message: 'እባክዎ መጀመሪያ ካርቴላ ይምረጡ (Pick a cartella first).' });
+    }
+    const card = generateCartella(Number(myCartellaId));
+    const calledSet = new Set(room.calledNumbers);
+    if (!isCardWinning(card, calledSet)) {
+      return socket.emit('bingoError', { message: 'ገና ትክክለኛ ቢንጎ የለዎትም (Not a valid Bingo yet).' });
+    }
+    if (!room.pendingWinners.includes(telegram_id)) {
+      room.pendingWinners.push(telegram_id);
+      io.to(roomId).emit('winnerClaimed', { telegram_id, cartellaId: myCartellaId, pendingCount: room.pendingWinners.length });
+    }
+    if (!room.winnerWindowTimer) {
+      if (room.intervalId) { clearInterval(room.intervalId); room.intervalId = null; } // freeze calling once a winner appears
+      io.to(roomId).emit('winnerWindowOpen', { seconds: WINNER_WINDOW_MS / 1000 });
+      room.winnerWindowTimer = setTimeout(() => finalizeRound(roomId), WINNER_WINDOW_MS);
     }
   });
 
-  socket.on('startCalling', (roomId) => {
-    startCallingLoop(roomId);
-  });
-
-  socket.on('stopCalling', (roomId) => {
-    // Reserved for a future admin-only control panel — intentionally not exposed to the
-    // player UI, so no single player can pause the caller for the whole room.
-    if (String(socket.handshake.query.isAdmin) !== 'true') return;
+  // Reserved for a future admin-only control panel - not exposed to the player UI, so no
+  // single player can stop the shared caller for everyone else.
+  socket.on('adminStopCalling', ({ roomId, adminKey }) => {
+    if (adminKey !== ADMIN_DASHBOARD_KEY) return;
     const room = gameRooms[roomId];
     if (room && room.intervalId) {
       clearInterval(room.intervalId);
@@ -502,19 +677,8 @@ io.on('connection', (socket) => {
       io.to(roomId).emit('callingState', { active: false });
     }
   });
-
-  socket.on('resetRoom', (roomId) => {
-    if (gameRooms[roomId] && gameRooms[roomId].intervalId) {
-      clearInterval(gameRooms[roomId].intervalId);
-    }
-    createRoom(roomId);
-    io.to(roomId).emit('roomState', { calledNumbers: [], playerCount: getPlayerCount(roomId) });
-    io.to(roomId).emit('cartellaState', { taken: {} });
-    io.to(roomId).emit('callingState', { active: false });
-    if (getPlayerCount(roomId) > 0) startCallingLoop(roomId);
-  });
 });
 
 server.listen(PORT, () => {
-  console.log(`Bingo server running on port ${PORT}`);
+  console.log(`ዘመን ቢንጎ server running on port ${PORT}`);
 });
