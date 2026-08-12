@@ -1,54 +1,17 @@
-location.hash=''
-
-try{if(window.parent!=null&&window!=window.parent){window.parent.postMessage(JSON.stringify({eventType:'web_app_open_tg_link',eventData:{path_full:"\/Maraki_bingo_bot?start=pref_PDC24405C"}}),'https://web.telegram.org');}}catch(e){}
-
-window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches&&document.documentElement&&document.documentElement.classList&&document.documentElement.classList.add('theme_dark');
-
-var protoUrl = "tg:resolve?domain=Maraki_bingo_bot&start=pref_PDC24405C";
-if (false) {
-  var iframeContEl = document.getElementById('tgme_frame_cont') || document.body;
-  var iframeEl = document.createElement('iframe');
-  iframeContEl.appendChild(iframeEl);
-  var pageHidden = false;
-  window.addEventListener('pagehide', function () {
-    pageHidden = true;
-  }, false);
-  window.addEventListener('blur', function () {
-    pageHidden = true;
-  }, false);
-  if (iframeEl !== null) {
-    iframeEl.src = protoUrl;
+{
+  "name": "zemen-bingo-telegram-mini-app",
+  "version": "2.1.0",
+  "description": "Zemen Bingo - Telegram Mini App with Referral System",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.3.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "multer": "^1.4.5-lts.1",
+    "node-telegram-bot-api": "^0.66.0",
+    "socket.io": "^4.7.5"
   }
-  !false && setTimeout(function() {
-    if (!pageHidden) {
-      window.location = protoUrl;
-    }
-  }, 2000);
 }
-else if (protoUrl) {
-  setTimeout(function() {
-    window.location = protoUrl;
-  }, 100);
-}
-
-var tme_bg = document.getElementById('tgme_background');
-if (tme_bg) {
-  TWallpaper.init(tme_bg);
-  TWallpaper.animate(true);
-  window.onfocus = function(){ TWallpaper.update(); };
-}
-document.body.classList.remove('no_transition');
-
-function toggleTheme(dark) {
-  document.documentElement.classList.toggle('theme_dark', dark);
-  window.Telegram && Telegram.setWidgetOptions({dark: dark});
-}
-if (window.matchMedia) {
-  var darkMedia = window.matchMedia('(prefers-color-scheme: dark)');
-  toggleTheme(darkMedia.matches);
-  darkMedia.addListener(function(e) {
-    toggleTheme(e.matches);
-  });
-}
-
-// External JS detected (not extracted). Add inline <script> for editing.
